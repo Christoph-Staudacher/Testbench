@@ -4,7 +4,11 @@
   <meta charset="UTF-8" />
   <title>PLZ-Karte</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    crossorigin=""
+  />
   <style>
     html, body {
       margin: 0; padding: 0; height: 100%;
@@ -24,32 +28,31 @@
     .plz-label {
       font-size: 12px;
       font-weight: bold;
-      background: transparent;
-      padding: 0;
-      border: none;
+      background: transparent !important;
+      padding: 0 !important;
+      border: none !important;
       color: #333;
-    }
-    select[multiple] {
-      height: 4.5em;
     }
     #debug-info {
       font-size: 12px;
       color: #555;
+      min-width: 200px;
     }
   </style>
 </head>
 <body>
   <div id="plz-search">
     <label for="plzInput">PLZ eingeben:</label>
-    <input type="text" id="plzInput" placeholder="z.B. 83022" />
+    <input type="text" id="plzInput" placeholder="z.B. 83064" />
     <button onclick="zoomToPLZ()">Suchen</button>
-    <label for="netzFilter">Netzform filtern:</label>
-    <select id="netzFilter" multiple>
-      <option value="TT" selected>TT</option>
-      <option value="TN" selected>TN</option>
-      <option value="">Unbekannt</option>
-    </select>
-    <div id="debug-info"></div>
+    
+    <!-- Netzform Filter: TT und TN immer aktiv, Unbekannt per Checkbox -->
+    <label>
+      <input type="checkbox" id="unknownMarkerToggle" />
+      Unbekannte Marker anzeigen
+    </label>
+    
+    <div id="debug-info">Lade Daten...</div>
   </div>
 
   <div id="map"></div>
@@ -62,57 +65,59 @@
       attribution: '&copy; OpenStreetMap-Mitwirkende'
     }).addTo(map);
 
-    const ZOOM_RANGE_PLZ1 = [7, 8];
-    const ZOOM_RANGE_PLZ2 = [9, 10];
-    const ZOOM_RANGE_PLZ3 = 11;
-    const ZOOM_RANGE_PLZ5 = [12, 20];
-    const MARKER_MIN_ZOOM = 10;
+    const ZOOM_RANGE = {
+      plz1: [7, 8],
+      plz2: [9, 10],
+      plz3: [11],
+      plz5: [12, 20],
+      markers: [10, 20],
+    };
 
-    let layerPLZ1 = null, layerPLZ2 = null, layerPLZ3 = null, layerPLZ5 = null;
-    let markerLayer = null;
-    const plzLayers = [];
+    let layerPLZ1, layerPLZ2, layerPLZ3, layerPLZ5;
+    let markerLayer;
 
-    function inRange(zoom, range) {
-      return range.includes(zoom);
+    const plzFeatures = [];
+    let markerCount = 0;
+    let plzCount = { plz1: 0, plz2: 0, plz3: 0, plz5: 0 };
+
+    function inZoomRange(zoom, range) {
+      return zoom >= range[0] && zoom <= range[1];
     }
 
-    async function createPLZLayer(url, color, targetList) {
+    async function loadPLZLayer(url, color, plzKey) {
       const res = await fetch(url);
       const data = await res.json();
+      plzCount[plzKey] = data.features.length;
       return L.geoJSON(data, {
-        style: { color: color, weight: 1.2, fillOpacity: 0 },
+        style: {
+          color: color,
+          weight: 1.5,
+          fillOpacity: 0,
+        },
         onEachFeature: (feature, layer) => {
           const plz = feature.properties.plz || '';
           const einw = feature.properties.einwohner || 'k.A.';
           const note = feature.properties.note || '';
 
-          const popup = `<strong>PLZ:</strong> ${plz}<br><strong>Einwohner:</strong> ${einw}<br><em>${note}</em>`;
-          layer.bindPopup(popup);
+          layer.bindPopup(`<strong>PLZ:</strong> ${plz}<br><strong>Einwohner:</strong> ${einw}<br><em>${note}</em>`);
 
-          layer._myPlz = plz;
+          layer._plz = plz;
+          layer._plzKey = plzKey;
           layer._tooltipAdded = false;
 
-          plzLayers.push({ plz, layer });
-          targetList.push(layer);
+          plzFeatures.push(layer);
         }
       });
     }
 
-    const plz1List = [], plz2List = [], plz3List = [], plz5List = [];
-    let markerCount = 0;
+    async function loadMarkers(url) {
+      const res = await fetch(url);
+      const data = await res.json();
+      markerCount = data.features.length;
 
-    async function loadAllLayers() {
-      layerPLZ1 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-1stellig.geojson', '#999', plz1List);
-      layerPLZ2 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-2stellig.geojson', '#666', plz2List);
-      layerPLZ3 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-3stellig.geojson', '#444', plz3List);
-      layerPLZ5 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#333', plz5List);
-
-      const resMarkers = await fetch('https://christoph-staudacher.github.io/Netzkartendaten/Netzformen.geojson');
-      const dataMarkers = await resMarkers.json();
-      markerCount = dataMarkers.features.length;
-      markerLayer = L.geoJSON(dataMarkers, {
+      markerLayer = L.geoJSON(data, {
         pointToLayer: (feature, latlng) => {
-          const typ = feature.properties.Netzform || '';
+          const typ = feature.properties.netzform || '';
           let color = 'gray';
           let opacity = 0.5;
           if (typ === 'TT') { color = 'red'; opacity = 1; }
@@ -122,120 +127,127 @@
             color,
             fillColor: color,
             fillOpacity: opacity,
-            weight: 1
+            weight: 1,
           }).bindPopup(`<strong>Netzform:</strong> ${typ || 'Unbekannt'}`);
         }
       });
+    }
 
-      updateLayersVisibility();
+    async function loadAll() {
+      layerPLZ1 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-1stellig.geojson', '#999', 'plz1');
+      layerPLZ2 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-2stellig.geojson', '#666', 'plz2');
+      layerPLZ3 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-3stellig.geojson', '#444', 'plz3');
+      layerPLZ5 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#333', 'plz5');
+
+      await loadMarkers('https://christoph-staudacher.github.io/Netzkartendaten/Netzformen.geojson');
+
+      updateLayers();
       applyMarkerFilter();
       updateDebugInfo();
     }
 
-    function updateTooltips() {
-      const zoom = map.getZoom();
-      const bounds = map.getBounds();
-
-      const getRangeForLayer = (layer) => {
-        if (plz1List.includes(layer)) return ZOOM_RANGE_PLZ1;
-        if (plz2List.includes(layer)) return ZOOM_RANGE_PLZ2;
-        if (plz3List.includes(layer)) return ZOOM_RANGE_PLZ3;
-        if (plz5List.includes(layer)) return ZOOM_RANGE_PLZ5;
-        return [];
-      };
-
-      plzLayers.forEach(({ layer }) => {
-        const range = getRangeForLayer(layer);
-        const isVisible = inRange(zoom, range) && bounds.intersects(layer.getBounds());
-
-        if (isVisible && !layer._tooltipAdded) {
-          layer.bindTooltip(layer._myPlz, {
-            permanent: true,
-            direction: 'center',
-            className: 'plz-label',
-            opacity: 1
-          });
-          layer._tooltipAdded = true;
-        }
-
-        if (layer.getTooltip()) {
-          const el = layer.getTooltip().getElement();
-          if (el) el.style.display = isVisible ? 'block' : 'none';
-        }
-      });
-    }
-
-    function updateLayersVisibility() {
+    function updateLayers() {
       const zoom = map.getZoom();
 
-      toggleLayer(layerPLZ1, ZOOM_RANGE_PLZ1);
-      toggleLayer(layerPLZ2, ZOOM_RANGE_PLZ2);
-      toggleLayer(layerPLZ3, ZOOM_RANGE_PLZ3);
-      toggleLayer(layerPLZ5, ZOOM_RANGE_PLZ5);
+      toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
+      toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
+      toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
+      toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
 
-      if (zoom >= MARKER_MIN_ZOOM) {
-        if (!map.hasLayer(markerLayer)) map.addLayer(markerLayer);
-        applyMarkerFilter();
-      } else if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
+      if (markerLayer) {
+        if (inZoomRange(zoom, ZOOM_RANGE.markers)) {
+          if (!map.hasLayer(markerLayer)) map.addLayer(markerLayer);
+          applyMarkerFilter();
+        } else {
+          if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
+        }
+      }
 
       updateTooltips();
+      updateDebugInfo();
     }
 
-    function toggleLayer(layer, range) {
+    function toggleLayer(layer, zoomRange) {
       if (!layer) return;
       const zoom = map.getZoom();
-      if (inRange(zoom, range)) {
+      if (inZoomRange(zoom, zoomRange)) {
         if (!map.hasLayer(layer)) map.addLayer(layer);
       } else {
         if (map.hasLayer(layer)) map.removeLayer(layer);
       }
     }
 
+    function updateTooltips() {
+      const zoom = map.getZoom();
+      const bounds = map.getBounds();
+
+      plzFeatures.forEach(layer => {
+        const inRange = inZoomRange(zoom, ZOOM_RANGE[layer._plzKey] || [0,0]);
+        const visibleInMap = bounds.intersects(layer.getBounds());
+
+        const showTooltip = inRange && visibleInMap;
+
+        if (showTooltip && !layer._tooltipAdded) {
+          layer.bindTooltip(layer._plz, {
+            permanent: true,
+            direction: 'center',
+            className: 'plz-label',
+            opacity: 1,
+          });
+          layer._tooltipAdded = true;
+        }
+        if (layer.getTooltip()) {
+          const el = layer.getTooltip().getElement();
+          if (el) el.style.display = showTooltip ? 'block' : 'none';
+        }
+      });
+    }
+
     function applyMarkerFilter() {
       if (!markerLayer) return;
-      const selected = Array.from(document.getElementById('netzFilter').selectedOptions).map(o => o.value);
+      const showUnknown = document.getElementById('unknownMarkerToggle').checked;
+
       markerLayer.eachLayer(layer => {
-        const typ = layer.feature.properties.netzform || '';
-        const visible = selected.includes(typ);
-        const opacity = visible ? (typ ? 1 : 0.5) : 0;
+        const typ = layer.feature.properties.Netzform || '';
+        let visible = false;
+
+        if (typ === 'TT' || typ === 'TN') {
+          visible = true;
+        } else if (typ === '' || typ == null) {
+          visible = showUnknown;
+        }
+
+        const opacity = visible ? 1 : 0;
         layer.setStyle({ opacity, fillOpacity: opacity });
       });
     }
 
     function zoomToPLZ() {
       const input = document.getElementById('plzInput').value.trim();
-      const found = plzLayers.find(p => p.plz === input);
 
-      plzLayers.forEach(({ layer }) => {
-        if (layer.setStyle) {
-          layer.setStyle({ fillColor: 'transparent', fillOpacity: 0 });
-        }
+      plzFeatures.forEach(layer => {
+        layer.setStyle({ fillColor: 'transparent', fillOpacity: 0, color: '#000', weight: 1.5 });
       });
 
+      const found = plzFeatures.find(l => l._plz === input);
       if (found) {
-        const bounds = found.layer.getBounds();
-        map.fitBounds(bounds, { maxZoom: 12 });
-        found.layer.openPopup();
-        found.layer.setStyle({ fillColor: 'yellow', fillOpacity: 0.3, color: '#333', weight: 2 });
+        map.fitBounds(found.getBounds(), { maxZoom: 12 });
+        found.openPopup();
+        found.setStyle({ fillColor: 'yellow', fillOpacity: 0.3, color: '#333', weight: 2 });
       } else {
         alert('PLZ nicht gefunden oder noch nicht geladen.');
       }
     }
 
     function updateDebugInfo() {
-      document.getElementById('debug-info').innerText = `Geladen: PLZ1=${plz1List.length}, PLZ2=${plz2List.length}, PLZ3=${plz3List.length}, PLZ5=${plz5List.length}, Marker=${markerCount}`;
+      document.getElementById('debug-info').innerText =
+        `Geladen: PLZ1=${plzCount.plz1}, PLZ2=${plzCount.plz2}, PLZ3=${plzCount.plz3}, PLZ5=${plzCount.plz5}, Marker=${markerCount}`;
     }
 
-    map.on('zoomend', () => {
-      updateLayersVisibility();
-      updateDebugInfo();
-    });
+    map.on('zoomend', updateLayers);
     map.on('moveend', updateTooltips);
 
-    document.getElementById('netzFilter').addEventListener('change', () => {
-      applyMarkerFilter();
-      updateLayersVisibility();
-    });
+    document.getElementById('unknownMarkerToggle').addEventListener('change', applyMarkerFilter);
 
     document.getElementById('plzInput').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
@@ -244,7 +256,7 @@
       }
     });
 
-    loadAllLayers();
+    loadAll();
   </script>
 </body>
 </html>
