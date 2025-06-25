@@ -41,7 +41,7 @@
 <body>
   <div id="plz-search">
     <label for="plzInput">PLZ eingeben:</label>
-    <input type="text" id="plzInput" placeholder="z.B. 83052" />
+    <input type="text" id="plzInput" placeholder="z.B. 83022" />
     <button onclick="zoomToPLZ()">Suchen</button>
     <label for="netzFilter">Netzform filtern:</label>
     <select id="netzFilter" multiple>
@@ -80,7 +80,7 @@
       const res = await fetch(url);
       const data = await res.json();
       return L.geoJSON(data, {
-        style: { color: color, weight: 1.8, fillOpacity: 0 },
+        style: { color: color, weight: 1.2, fillOpacity: 0 },
         onEachFeature: (feature, layer) => {
           const plz = feature.properties.plz || '';
           const einw = feature.properties.einwohner || 'k.A.';
@@ -107,11 +107,6 @@
       layerPLZ3 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-3stellig.geojson', '#444', plz3List);
       layerPLZ5 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#333', plz5List);
 
-      map.addLayer(layerPLZ1);
-      map.addLayer(layerPLZ2);
-      map.addLayer(layerPLZ3);
-      map.addLayer(layerPLZ5);
-
       const resMarkers = await fetch('https://christoph-staudacher.github.io/Netzkartendaten/Netzformen.geojson');
       const dataMarkers = await resMarkers.json();
       markerCount = dataMarkers.features.length;
@@ -131,9 +126,9 @@
           }).bindPopup(`<strong>Netzform:</strong> ${typ || 'Unbekannt'}`);
         }
       });
-      map.addLayer(markerLayer);
-      applyMarkerFilter();
+
       updateLayersVisibility();
+      applyMarkerFilter();
       updateDebugInfo();
     }
 
@@ -184,7 +179,6 @@
       } else if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
 
       updateTooltips();
-      updateDebugInfo();
     }
 
     function toggleLayer(layer, range) {
@@ -232,7 +226,10 @@
       document.getElementById('debug-info').innerText = `Geladen: PLZ1=${plz1List.length}, PLZ2=${plz2List.length}, PLZ3=${plz3List.length}, PLZ5=${plz5List.length}, Marker=${markerCount}`;
     }
 
-    map.on('zoomend', updateLayersVisibility);
+    map.on('zoomend', () => {
+      updateLayersVisibility();
+      updateDebugInfo();
+    });
     map.on('moveend', updateTooltips);
 
     document.getElementById('netzFilter').addEventListener('change', () => {
