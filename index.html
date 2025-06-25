@@ -66,7 +66,7 @@
     const ZOOM_RANGE_PLZ2 = [8, 9];
     const ZOOM_RANGE_PLZ3 = [10];
     const ZOOM_RANGE_PLZ5 = [11, 20];
-    const MARKER_MIN_ZOOM = 10;
+    const MARKER_MIN_ZOOM = [10];
 
     let layerPLZ1 = null, layerPLZ2 = null, layerPLZ3 = null, layerPLZ5 = null;
     let markerLayer = null;
@@ -102,9 +102,9 @@
     let markerCount = 0;
 
     async function loadAllLayers() {
-      layerPLZ1 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#999', plz1List);
-      layerPLZ2 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#666', plz2List);
-      layerPLZ3 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#444', plz3List);
+      layerPLZ1 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-1stellig.geojson', '#999', plz1List);
+      layerPLZ2 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-2stellig.geojson', '#666', plz2List);
+      layerPLZ3 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-3stellig.geojson', '#444', plz3List);
       layerPLZ5 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#333', plz5List);
 
       map.addLayer(layerPLZ1);
