@@ -36,7 +36,7 @@
 <body>
   <div id="plz-search">
     <label for="plzInput">PLZ eingeben:</label>
-    <input type="text" id="plzInput" placeholder="z.B. 83033" />
+    <input type="text" id="plzInput" placeholder="z.B. 83064" />
     <button onclick="zoomToPLZ()">Suchen</button>
     <label for="netzFilter">Netzform filtern:</label>
     <select id="netzFilter" multiple>
@@ -56,10 +56,10 @@
       attribution: '&copy; OpenStreetMap-Mitwirkende'
     }).addTo(map);
 
-    const ZOOM_RANGE_PLZ1 = [6, 7];
-    const ZOOM_RANGE_PLZ2 = [8, 9];
-    const ZOOM_RANGE_PLZ3 = [10];
-    const ZOOM_RANGE_PLZ5 = [11, 20];
+    const ZOOM_RANGE_PLZ1 = [7, 8];
+    const ZOOM_RANGE_PLZ2 = [9, 10];
+    const ZOOM_RANGE_PLZ3 = [11];
+    const ZOOM_RANGE_PLZ5 = [12, 20];
     const MARKER_MIN_ZOOM = 10;
 
     let layerPLZ1 = null, layerPLZ2 = null, layerPLZ3 = null, layerPLZ5 = null;
@@ -74,7 +74,7 @@
       const res = await fetch(url);
       const data = await res.json();
       return L.geoJSON(data, {
-        style: { color: color, weight: 1.2, fillOpacity: 0 },
+        style: { color: color, weight: 2.5, fillOpacity: 0 },
         onEachFeature: (feature, layer) => {
           const plz = feature.properties.plz || '';
           const einw = feature.properties.einwohner || 'k.A.';
@@ -92,12 +92,12 @@
     }
 
     async function loadAllLayers() {
-      layerPLZ1 = await createPLZLayer('URL_ZU_PLZ1.geojson', '#999');
-      layerPLZ2 = await createPLZLayer('URL_ZU_PLZ2.geojson', '#666');
-      layerPLZ3 = await createPLZLayer('URL_ZU_PLZ3.geojson', '#444');
-      layerPLZ5 = await createPLZLayer('URL_ZU_PLZ5.geojson', '#333');
+      layerPLZ1 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-1stellig.geojson', '#999');
+      layerPLZ2 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-2stellig.geojson', '#666');
+      layerPLZ3 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-3stellig.geojson', '#444');
+      layerPLZ5 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#333');
 
-      const resMarkers = await fetch('URL_ZU_NETZMARKER.geojson');
+      const resMarkers = await fetch('https://christoph-staudacher.github.io/Netzkartendaten/Netzformen.geojson');
       const dataMarkers = await resMarkers.json();
       markerLayer = L.geoJSON(dataMarkers, {
         pointToLayer: (feature, latlng) => {
