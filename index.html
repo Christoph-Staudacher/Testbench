@@ -43,7 +43,7 @@
 <body>
   <div id="plz-search">
     <label for="plzInput">PLZ eingeben:</label>
-    <input type="text" id="plzInput" placeholder="z.B. 83064" />
+    <input type="text" id="plzInput" placeholder="z.B. 83022" />
     <button onclick="zoomToPLZ()">Suchen</button>
     
     <!-- Netzform Filter: TT und TN immer aktiv, Unbekannt per Checkbox -->
@@ -66,11 +66,11 @@
     }).addTo(map);
 
     const ZOOM_RANGE = {
-      plz1: [7, 8],
-      plz2: [9, 10],
-      plz3: 11,
+      plz1: [6, 7],
+      plz2: [8, 9],
+      plz3: [10, 11],
       plz5: [12, 20],
-      markers: [10, 20],
+      markers: [9, 20],
     };
 
     let layerPLZ1, layerPLZ2, layerPLZ3, layerPLZ5;
@@ -91,7 +91,7 @@
       return L.geoJSON(data, {
         style: {
           color: color,
-          weight: 1.5,
+          weight: 2,
           fillOpacity: 0,
         },
         onEachFeature: (feature, layer) => {
