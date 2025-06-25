@@ -43,7 +43,7 @@
 <body>
   <div id="plz-search">
     <label for="plzInput">PLZ eingeben:</label>
-    <input type="text" id="plzInput" placeholder="z.B. 83064" />
+    <input type="text" id="plzInput" placeholder="z.B. 83022" />
     <button onclick="zoomToPLZ()">Suchen</button>
     
     <!-- Netzform Filter: TT und TN immer aktiv, Unbekannt per Checkbox -->
@@ -117,7 +117,7 @@
 
       markerLayer = L.geoJSON(data, {
         pointToLayer: (feature, latlng) => {
-          const typ = feature.properties.netzform || '';
+          const typ = feature.properties.Netzform || '';
           let color = 'gray';
           let opacity = 0.5;
           if (typ === 'TT') { color = 'red'; opacity = 1; }
