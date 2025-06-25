@@ -41,7 +41,7 @@
 <body>
   <div id="plz-search">
     <label for="plzInput">PLZ eingeben:</label>
-    <input type="text" id="plzInput" placeholder="z.B. 83052" />
+    <input type="text" id="plzInput" placeholder="z.B. 83022" />
     <button onclick="zoomToPLZ()">Suchen</button>
     <label for="netzFilter">Netzform filtern:</label>
     <select id="netzFilter" multiple>
@@ -64,9 +64,9 @@
 
     const ZOOM_RANGE_PLZ1 = [6, 7];
     const ZOOM_RANGE_PLZ2 = [8, 9];
-    const ZOOM_RANGE_PLZ3 = [10];
+    const ZOOM_RANGE_PLZ3 = 10;
     const ZOOM_RANGE_PLZ5 = [11, 20];
-    const MARKER_MIN_ZOOM = [10];
+    const MARKER_MIN_ZOOM = 10;
 
     let layerPLZ1 = null, layerPLZ2 = null, layerPLZ3 = null, layerPLZ5 = null;
     let markerLayer = null;
@@ -117,7 +117,7 @@
       markerCount = dataMarkers.features.length;
       markerLayer = L.geoJSON(dataMarkers, {
         pointToLayer: (feature, latlng) => {
-          const typ = feature.properties.netzform || '';
+          const typ = feature.properties.Netzform || '';
           let color = 'gray';
           let opacity = 0.5;
           if (typ === 'TT') { color = 'red'; opacity = 1; }
