@@ -37,7 +37,7 @@
 <body>
   <div id="plz-search">
     <label for="plzInput">PLZ eingeben:</label>
-    <input type="text" id="plzInput" placeholder="z.B. 83022" />
+    <input type="text" id="plzInput" placeholder="z.B. 83026" />
     <button onclick="zoomToPLZ()">Suchen</button>
     <label for="netzFilter">Netzform filtern:</label>
     <select id="netzFilter" multiple>
@@ -78,7 +78,7 @@
       const res = await fetch(url);
       const data = await res.json();
       return L.geoJSON(data, {
-        style: { color: color, weight: 1.2, fillOpacity: 0 },
+        style: { color: color, weight: 2.5, fillOpacity: 0 },
         onEachFeature: (feature, layer) => {
           const plz = feature.properties.plz || '';
           const einw = feature.properties.einwohner || 'k.A.';
