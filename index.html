@@ -17,6 +17,7 @@
       background: #f8f8f8;
       font-family: sans-serif;
       display: flex;
+      flex-wrap: wrap;
       gap: 10px;
       align-items: center;
     }
@@ -31,12 +32,16 @@
     select[multiple] {
       height: 4.5em;
     }
+    #debug-info {
+      font-size: 12px;
+      color: #555;
+    }
   </style>
 </head>
 <body>
   <div id="plz-search">
     <label for="plzInput">PLZ eingeben:</label>
-    <input type="text" id="plzInput" placeholder="z.B. 83064" />
+    <input type="text" id="plzInput" placeholder="z.B. 83052" />
     <button onclick="zoomToPLZ()">Suchen</button>
     <label for="netzFilter">Netzform filtern:</label>
     <select id="netzFilter" multiple>
@@ -44,6 +49,7 @@
       <option value="TN" selected>TN</option>
       <option value="">Unbekannt</option>
     </select>
+    <div id="debug-info"></div>
   </div>
 
   <div id="map"></div>
@@ -56,10 +62,10 @@
       attribution: '&copy; OpenStreetMap-Mitwirkende'
     }).addTo(map);
 
-    const ZOOM_RANGE_PLZ1 = [7, 8];
-    const ZOOM_RANGE_PLZ2 = [9, 10];
-    const ZOOM_RANGE_PLZ3 = [11];
-    const ZOOM_RANGE_PLZ5 = [12, 20];
+    const ZOOM_RANGE_PLZ1 = [6, 7];
+    const ZOOM_RANGE_PLZ2 = [8, 9];
+    const ZOOM_RANGE_PLZ3 = [10];
+    const ZOOM_RANGE_PLZ5 = [11, 20];
     const MARKER_MIN_ZOOM = 10;
 
     let layerPLZ1 = null, layerPLZ2 = null, layerPLZ3 = null, layerPLZ5 = null;
@@ -70,11 +76,11 @@
       return range.includes(zoom);
     }
 
-    async function createPLZLayer(url, color) {
+    async function createPLZLayer(url, color, targetList) {
       const res = await fetch(url);
       const data = await res.json();
       return L.geoJSON(data, {
-        style: { color: color, weight: 2.5, fillOpacity: 0 },
+        style: { color: color, weight: 2.0, fillOpacity: 0 },
         onEachFeature: (feature, layer) => {
           const plz = feature.properties.plz || '';
           const einw = feature.properties.einwohner || 'k.A.';
@@ -87,18 +93,28 @@
           layer._tooltipAdded = false;
 
           plzLayers.push({ plz, layer });
+          targetList.push(layer);
         }
       });
     }
 
+    const plz1List = [], plz2List = [], plz3List = [], plz5List = [];
+    let markerCount = 0;
+
     async function loadAllLayers() {
-      layerPLZ1 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-1stellig.geojson', '#999');
-      layerPLZ2 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-2stellig.geojson', '#666');
-      layerPLZ3 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-3stellig.geojson', '#444');
-      layerPLZ5 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#333');
+      layerPLZ1 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#999', plz1List);
+      layerPLZ2 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#666', plz2List);
+      layerPLZ3 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#444', plz3List);
+      layerPLZ5 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#333', plz5List);
+
+      map.addLayer(layerPLZ1);
+      map.addLayer(layerPLZ2);
+      map.addLayer(layerPLZ3);
+      map.addLayer(layerPLZ5);
 
       const resMarkers = await fetch('https://christoph-staudacher.github.io/Netzkartendaten/Netzformen.geojson');
       const dataMarkers = await resMarkers.json();
+      markerCount = dataMarkers.features.length;
       markerLayer = L.geoJSON(dataMarkers, {
         pointToLayer: (feature, latlng) => {
           const typ = feature.properties.netzform || '';
@@ -115,7 +131,10 @@
           }).bindPopup(`<strong>Netzform:</strong> ${typ || 'Unbekannt'}`);
         }
       });
+      map.addLayer(markerLayer);
+      applyMarkerFilter();
       updateLayersVisibility();
+      updateDebugInfo();
     }
 
     function updateTooltips() {
@@ -139,27 +158,28 @@
     function updateLayersVisibility() {
       const zoom = map.getZoom();
 
-      if (inRange(zoom, ZOOM_RANGE_PLZ1)) {
-        if (!map.hasLayer(layerPLZ1)) map.addLayer(layerPLZ1);
-      } else if (map.hasLayer(layerPLZ1)) map.removeLayer(layerPLZ1);
-
-      if (inRange(zoom, ZOOM_RANGE_PLZ2)) {
-        if (!map.hasLayer(layerPLZ2)) map.addLayer(layerPLZ2);
-      } else if (map.hasLayer(layerPLZ2)) map.removeLayer(layerPLZ2);
-
-      if (inRange(zoom, ZOOM_RANGE_PLZ3)) {
-        if (!map.hasLayer(layerPLZ3)) map.addLayer(layerPLZ3);
-      } else if (map.hasLayer(layerPLZ3)) map.removeLayer(layerPLZ3);
-
-      if (inRange(zoom, ZOOM_RANGE_PLZ5)) {
-        if (!map.hasLayer(layerPLZ5)) map.addLayer(layerPLZ5);
-        updateTooltips();
-      } else if (map.hasLayer(layerPLZ5)) map.removeLayer(layerPLZ5);
+      toggleLayer(layerPLZ1, ZOOM_RANGE_PLZ1);
+      toggleLayer(layerPLZ2, ZOOM_RANGE_PLZ2);
+      toggleLayer(layerPLZ3, ZOOM_RANGE_PLZ3);
+      toggleLayer(layerPLZ5, ZOOM_RANGE_PLZ5);
 
       if (zoom >= MARKER_MIN_ZOOM) {
         if (!map.hasLayer(markerLayer)) map.addLayer(markerLayer);
         applyMarkerFilter();
       } else if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
+
+      updateTooltips();
+      updateDebugInfo();
+    }
+
+    function toggleLayer(layer, range) {
+      if (!layer) return;
+      const zoom = map.getZoom();
+      if (inRange(zoom, range)) {
+        if (!map.hasLayer(layer)) map.addLayer(layer);
+      } else {
+        if (map.hasLayer(layer)) map.removeLayer(layer);
+      }
     }
 
     function applyMarkerFilter() {
@@ -183,6 +203,10 @@
       } else {
         alert('PLZ nicht gefunden oder noch nicht geladen.');
       }
+    }
+
+    function updateDebugInfo() {
+      document.getElementById('debug-info').innerText = `Geladen: PLZ1=${plz1List.length}, PLZ2=${plz2List.length}, PLZ3=${plz3List.length}, PLZ5=${plz5List.length}, Marker=${markerCount}`;
     }
 
     map.on('zoomend', updateLayersVisibility);
