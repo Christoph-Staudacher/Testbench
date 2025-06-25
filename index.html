@@ -185,8 +185,7 @@
       const el = layer.getTooltip().getElement();
       if (el) el.style.display = isVisible ? 'block' : 'none';
     }
-  });
-}) => {
+  } => {
         if (!layer._tooltipAdded && bounds.intersects(layer.getBounds())) {
           layer.bindTooltip(layer._myPlz, {
             permanent: true,
