@@ -168,7 +168,7 @@
       if (el) el.style.display = isVisible ? 'block' : 'none';
     }
   });
-}) => {
+} => {
     const isVisible = zoom >= 11 && bounds.intersects(layer.getBounds());
 
     if (isVisible && !layer._tooltipAdded) {
