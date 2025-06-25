@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>PLZ-Karte</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <style>
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+    }
+    #map {
+      width: 100%; height: 90vh;
+    }
+    #plz-search {
+      padding: 10px;
+      background: #f8f8f8;
+      font-family: sans-serif;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .plz-label {
+      font-size: 12px;
+      font-weight: bold;
+      background: rgba(255, 255, 255, 0.75);
+      padding: 2px 5px;
+      border-radius: 4px;
+      border: 1px solid #999;
+      color: #333;
+    }
+    select[multiple] {
+      height: 4.5em;
+    }
+  </style>
+</head>
+<body>
+  <div id="plz-search">
+    <label for="plzInput">PLZ eingeben:</label>
+    <input type="text" id="plzInput" placeholder="z.B. 83052" />
+    <button onclick="zoomToPLZ()">Suchen</button>
+    <label for="netzFilter">Netzform filtern:</label>
+    <select id="netzFilter" multiple>
+      <option value="TT" selected>TT</option>
+      <option value="TN" selected>TN</option>
+      <option value="">Unbekannt</option>
+    </select>
+  </div>
+
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script>
+    const map = L.map('map').setView([51.2, 10.5], 6);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap-Mitwirkende'
+    }).addTo(map);
+
+    const ZOOM_RANGE_PLZ1 = [6, 7];
+    const ZOOM_RANGE_PLZ2 = [8, 9];
+    const ZOOM_RANGE_PLZ3 = [10];
+    const ZOOM_RANGE_PLZ5 = [11, 20];
+    const MARKER_MIN_ZOOM = 10;
+
+    let layerPLZ1 = null, layerPLZ2 = null, layerPLZ3 = null, layerPLZ5 = null;
+    let markerLayer = null;
+
+    const plzLayers = [];
+
+    // Hilfsfunktion
+    function inRange(zoom, range) {
+      return range.includes(zoom);
+    }
+
+    // Funktion zum Erstellen der PLZ-Layer
+    async function createPLZLayer(url, color) {
+      const res = await fetch(url);
+      const data = await res.json();
+      return L.geoJSON(data, {
+        style: { color: color, weight: 1.2, fillOpacity: 0 },
+        onEachFeature: (feature, layer) => {
+          const plz = feature.properties.plz || '';
+          const einw = feature.properties.einwohner || 'k.A.';
+          const note = feature.properties.note || '';
+
+          layer.bindTooltip(plz, {
+            permanent: true,
+            direction: 'center',
+            className: 'plz-label',
+            opacity: 1
+          });
+
+          const popup = `<strong>PLZ:</strong> ${plz}<br><strong>Einwohner:</strong> ${einw}<br><em>${note}</em>`;
+          layer.bindPopup(popup);
+
+          plzLayers.push({ plz, layer });
+        }
+      });
+    }
+
+    // Alle Layer laden und speichern
+    async function loadAllLayers() {
+      layerPLZ1 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-1stellig.geojson', '#999');
+      layerPLZ2 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-2stellig.geojson', '#666');
+      layerPLZ3 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-3stellig.geojson', '#444');
+      layerPLZ5 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#333');
+
+      // Alle Layer werden erstmal NICHT zur Karte hinzugefügt.
+      // Die Anzeige erfolgt später anhand der Zoomstufe
+
+      // Marker laden
+      const resMarkers = await fetch('https://christoph-staudacher.github.io/Netzkartendaten/Netzformen.geojson');
+      const dataMarkers = await resMarkers.json();
+      markerLayer = L.geoJSON(dataMarkers, {
+        pointToLayer: (feature, latlng) => {
+          const typ = feature.properties.netzform || '';
+          let color = 'gray';
+          let opacity = 0.5;
+          if (typ === 'TT') { color = 'red'; opacity = 1; }
+          if (typ === 'TN') { color = 'green'; opacity = 1; }
+          return L.circleMarker(latlng, {
+            radius: 6,
+            color,
+            fillColor: color,
+            fillOpacity: opacity,
+            weight: 1
+          }).bindPopup(`<strong>Netzform:</strong> ${typ || 'Unbekannt'}`);
+        }
+      });
+      // Marker sind schon im Layer, aber noch nicht auf der Karte.
+      updateLayersVisibility();
+    }
+
+    // Sichtbarkeit der Layer je nach Zoomstufe steuern
+    function updateLayersVisibility() {
+      const zoom = map.getZoom();
+
+      // PLZ1
+      if (inRange(zoom, ZOOM_RANGE_PLZ1)) {
+        if (!map.hasLayer(layerPLZ1)) map.addLayer(layerPLZ1);
+      } else {
+        if (map.hasLayer(layerPLZ1)) map.removeLayer(layerPLZ1);
+      }
+
+      // PLZ2
+      if (inRange(zoom, ZOOM_RANGE_PLZ2)) {
+        if (!map.hasLayer(layerPLZ2)) map.addLayer(layerPLZ2);
+      } else {
+        if (map.hasLayer(layerPLZ2)) map.removeLayer(layerPLZ2);
+      }
+
+      // PLZ3
+      if (inRange(zoom, ZOOM_RANGE_PLZ3)) {
+        if (!map.hasLayer(layerPLZ3)) map.addLayer(layerPLZ3);
+      } else {
+        if (map.hasLayer(layerPLZ3)) map.removeLayer(layerPLZ3);
+      }
+
+      // PLZ5
+      if (inRange(zoom, ZOOM_RANGE_PLZ5)) {
+        if (!map.hasLayer(layerPLZ5)) map.addLayer(layerPLZ5);
+      } else {
+        if (map.hasLayer(layerPLZ5)) map.removeLayer(layerPLZ5);
+      }
+
+      // Marker
+      if (zoom >= MARKER_MIN_ZOOM) {
+        if (!map.hasLayer(markerLayer)) map.addLayer(markerLayer);
+        applyMarkerFilter();
+      } else {
+        if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
+      }
+    }
+
+    // Marker nach Netzform filtern
+    function applyMarkerFilter() {
+      if (!markerLayer) return;
+      const selected = Array.from(document.getElementById('netzFilter').selectedOptions).map(o => o.value);
+      markerLayer.eachLayer(layer => {
+        const typ = layer.feature.properties.netzform || '';
+        const visible = selected.includes(typ);
+        const opacity = visible ? (typ ? 1 : 0.5) : 0;
+        layer.setStyle({ opacity, fillOpacity: opacity });
+      });
+    }
+
+    // PLZ suchen und zoomTo
+    function zoomToPLZ() {
+      const input = document.getElementById('plzInput').value.trim();
+      const found = plzLayers.find(p => p.plz === input);
+      if (found) {
+        const bounds = found.layer.getBounds();
+        map.fitBounds(bounds, { maxZoom: 12 });
+        found.layer.openPopup();
+      } else {
+        alert('PLZ nicht gefunden oder noch nicht geladen.');
+      }
+    }
+
+    // Eventlistener
+    map.on('zoomend', updateLayersVisibility);
+    document.getElementById('netzFilter').addEventListener('change', () => {
+      applyMarkerFilter();
+      updateLayersVisibility();
+    });
+
+    // Layer sofort laden
+    loadAllLayers();
+
+  </script>
+</body>
+</html>
