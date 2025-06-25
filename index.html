@@ -41,7 +41,7 @@
 <body>
   <div id="plz-search">
     <label for="plzInput">PLZ eingeben:</label>
-    <input type="text" id="plzInput" placeholder="z.B. 83095" />
+    <input type="text" id="plzInput" placeholder="z.B. 83052" />
     <button onclick="zoomToPLZ()">Suchen</button>
     <label for="netzFilter">Netzform filtern:</label>
     <select id="netzFilter" multiple>
@@ -138,55 +138,22 @@
     }
 
     function updateTooltips() {
-  const zoom = map.getZoom();
-  const bounds = map.getBounds();
+      const zoom = map.getZoom();
+      const bounds = map.getBounds();
 
-  const getRangeForLayer = (layer) => {
-    if (plz1List.includes(layer)) return ZOOM_RANGE_PLZ1;
-    if (plz2List.includes(layer)) return ZOOM_RANGE_PLZ2;
-    if (plz3List.includes(layer)) return ZOOM_RANGE_PLZ3;
-    if (plz5List.includes(layer)) return ZOOM_RANGE_PLZ5;
-    return [];
-  };
+      const getRangeForLayer = (layer) => {
+        if (plz1List.includes(layer)) return ZOOM_RANGE_PLZ1;
+        if (plz2List.includes(layer)) return ZOOM_RANGE_PLZ2;
+        if (plz3List.includes(layer)) return ZOOM_RANGE_PLZ3;
+        if (plz5List.includes(layer)) return ZOOM_RANGE_PLZ5;
+        return [];
+      };
 
-  plzLayers.forEach(({ layer }) => {
-    const range = getRangeForLayer(layer);
-    const isVisible = inRange(zoom, range) && bounds.intersects(layer.getBounds());
+      plzLayers.forEach(({ layer }) => {
+        const range = getRangeForLayer(layer);
+        const isVisible = inRange(zoom, range) && bounds.intersects(layer.getBounds());
 
-    if (isVisible && !layer._tooltipAdded) {
-      layer.bindTooltip(layer._myPlz, {
-        permanent: true,
-        direction: 'center',
-        className: 'plz-label',
-        opacity: 1
-      });
-      layer._tooltipAdded = true;
-    }
-
-    if (layer.getTooltip()) {
-      const el = layer.getTooltip().getElement();
-      if (el) el.style.display = isVisible ? 'block' : 'none';
-    }
-  });
-} => {
-    const isVisible = zoom >= 11 && bounds.intersects(layer.getBounds());
-
-    if (isVisible && !layer._tooltipAdded) {
-      layer.bindTooltip(layer._myPlz, {
-        permanent: true,
-        direction: 'center',
-        className: 'plz-label',
-        opacity: 1
-      });
-      layer._tooltipAdded = true;
-    }
-
-    if (layer.getTooltip()) {
-      const el = layer.getTooltip().getElement();
-      if (el) el.style.display = isVisible ? 'block' : 'none';
-    }
-  } => {
-        if (!layer._tooltipAdded && bounds.intersects(layer.getBounds())) {
+        if (isVisible && !layer._tooltipAdded) {
           layer.bindTooltip(layer._myPlz, {
             permanent: true,
             direction: 'center',
@@ -194,6 +161,11 @@
             opacity: 1
           });
           layer._tooltipAdded = true;
+        }
+
+        if (layer.getTooltip()) {
+          const el = layer.getTooltip().getElement();
+          if (el) el.style.display = isVisible ? 'block' : 'none';
         }
       });
     }
@@ -237,23 +209,20 @@
     }
 
     function zoomToPLZ() {
-  const input = document.getElementById('plzInput').value.trim();
-  const found = plzLayers.find(p => p.plz === input);
+      const input = document.getElementById('plzInput').value.trim();
+      const found = plzLayers.find(p => p.plz === input);
 
-  plzLayers.forEach(({ layer }) => {
-    layer.setStyle({ fillColor: 'transparent', fillOpacity: 0 });
-  });
+      plzLayers.forEach(({ layer }) => {
+        if (layer.setStyle) {
+          layer.setStyle({ fillColor: 'transparent', fillOpacity: 0 });
+        }
+      });
 
-  if (found) {
-    const bounds = found.layer.getBounds();
-    map.fitBounds(bounds, { maxZoom: 12 });
-    found.layer.openPopup();
-    found.layer.setStyle({ fillColor: 'yellow', fillOpacity: 0.3 });
-  } else {
-    alert('PLZ nicht gefunden oder noch nicht geladen.');
-  }
-});
+      if (found) {
+        const bounds = found.layer.getBounds();
+        map.fitBounds(bounds, { maxZoom: 12 });
         found.layer.openPopup();
+        found.layer.setStyle({ fillColor: 'yellow', fillOpacity: 0.3, color: '#333', weight: 2 });
       } else {
         alert('PLZ nicht gefunden oder noch nicht geladen.');
       }
@@ -264,22 +233,21 @@
     }
 
     map.on('zoomend', updateLayersVisibility);
-    document.getElementById('netzFilter').addEventListener('change', () => {
-  applyMarkerFilter();
-  updateLayersVisibility();
-});
+    map.on('moveend', updateTooltips);
 
-document.getElementById('plzInput').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    zoomToPLZ();
-  }
-});
+    document.getElementById('netzFilter').addEventListener('change', () => {
+      applyMarkerFilter();
       updateLayersVisibility();
     });
 
+    document.getElementById('plzInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        zoomToPLZ();
+      }
+    });
+
     loadAllLayers();
-map.on('moveend', updateTooltips);
   </script>
 </body>
 </html>
