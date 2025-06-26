@@ -274,9 +274,10 @@
         }
       });
 
-      const ratio = countTN > 0 ? ((countTT / countTN) * 100).toFixed(1) + '%' : 'n.v.';
+      const totalKnown = countTT + countTN;
+      const ratio = totalKnown > 0 ? ((countTT / totalKnown) * 100).toFixed(1) + '%' : 'n.v.';
       document.getElementById('marker-info').innerText =
-        `In ${layer._plz} sind ${countAll} Marker, davon TT: ${countTT}, TN: ${countTN}, Unbekannt: ${countUnknown}, TT/TN Anteil: ${ratio}`;
+        `Im PLZ-Bereich ${layer._plz} sind ${countAll} Marker // Davon ${countTT} TT, ${countTN} TN und ${countUnknown} Unbekannt. TT-Anteil: ${ratio}`;
     }
 
     function updateDebugInfo() {
