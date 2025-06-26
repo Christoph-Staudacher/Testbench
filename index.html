@@ -29,17 +29,23 @@
       border: none;
       color: #333;
     }
-    #debug-info, #marker-info {
+    #marker-info {
       font-size: 12px;
       color: #555;
+    }
+    #debug-info {
+      font-size: 12px;
+      color: #555;
+      width: 100%;
       text-align: left;
+      margin-top: 5px;
     }
   </style>
 </head>
 <body>
   <div id="plz-search">
     <label for="plzInput">PLZ eingeben:</label>
-    <input type="text" id="plzInput" placeholder="z.B. 83052" />
+    <input type="text" id="plzInput" placeholder="z.B. 83033" />
     <button onclick="zoomToPLZ()">Suchen</button>
 
     <label>
@@ -56,71 +62,62 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script>
     const map = L.map('map').setView([51.2, 10.5], 6);
-
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap-Mitwirkende'
     }).addTo(map);
 
-    const ZOOM_RANGE_PLZ1 = [6, 7];
-    const ZOOM_RANGE_PLZ2 = [8, 9];
-    const ZOOM_RANGE_PLZ3 = [10];
-    const ZOOM_RANGE_PLZ5 = [11, 20];
-    const MARKER_MIN_ZOOM = 9;
+    const ZOOM_RANGE = {
+      plz1: [6, 7],
+      plz2: [8, 9],
+      plz3: [10, 11],
+      plz5: [12, 20],
+      markers: [9, 20],
+    };
 
-    let layerPLZ1 = null, layerPLZ2 = null, layerPLZ3 = null, layerPLZ5 = null;
-    let markerLayer = null;
-    const plzLayers = [];
+    let layerPLZ1, layerPLZ2, layerPLZ3, layerPLZ5, markerLayer;
+    const plzFeatures = [];
+    let markerCount = 0;
+    let plzCount = { plz1: 0, plz2: 0, plz3: 0, plz5: 0 };
 
-    function inRange(zoom, range) {
-      return range.includes(zoom);
-    }
-
-    async function createPLZLayer(url, color, targetList) {
+    async function loadPLZLayer(url, color, plzKey) {
       const res = await fetch(url);
       const data = await res.json();
+      plzCount[plzKey] = data.features.length;
+
       return L.geoJSON(data, {
-        style: { color: color, weight: 1.2, fillOpacity: 0 },
+        style: {
+          color,
+          weight: 1.5,
+          fillOpacity: 0
+        },
         onEachFeature: (feature, layer) => {
           const plz = feature.properties.plz || '';
           const einw = feature.properties.einwohner || 'k.A.';
           const note = feature.properties.note || '';
 
-          const popup = `<strong>PLZ:</strong> ${plz}<br><strong>Einwohner:</strong> ${einw}<br><em>${note}</em>`;
-          layer.bindPopup(popup);
-
-          layer._myPlz = plz;
+          layer.bindPopup(`<strong>PLZ:</strong> ${plz}<br><strong>Einwohner:</strong> ${einw}<br><em>${note}</em>`);
+          layer._plz = plz;
+          layer._plzKey = plzKey;
           layer._tooltipAdded = false;
 
-          plzLayers.push({ plz, layer });
-          targetList.push(layer);
+          plzFeatures.push(layer);
         }
       });
     }
 
-    const plz1List = [], plz2List = [], plz3List = [], plz5List = [];
-    let markerCount = 0;
+    async function loadMarkers(url) {
+      const res = await fetch(url);
+      const data = await res.json();
+      markerCount = data.features.length;
 
-    async function loadAllLayers() {
-      layerPLZ1 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-1stellig.geojson', '#999', plz1List);
-      layerPLZ2 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-2stellig.geojson', '#666', plz2List);
-      layerPLZ3 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-3stellig.geojson', '#444', plz3List);
-      layerPLZ5 = await createPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#333', plz5List);
-
-      map.addLayer(layerPLZ1);
-      map.addLayer(layerPLZ2);
-      map.addLayer(layerPLZ3);
-      map.addLayer(layerPLZ5);
-
-      const resMarkers = await fetch('https://christoph-staudacher.github.io/Netzkartendaten/Netzformen.geojson');
-      const dataMarkers = await resMarkers.json();
-      markerCount = dataMarkers.features.length;
-      markerLayer = L.geoJSON(dataMarkers, {
+      markerLayer = L.geoJSON(data, {
         pointToLayer: (feature, latlng) => {
-          const typ = feature.properties.netzform || '';
+          const typ = feature.properties.Netzform || '';
           let color = 'gray';
           let opacity = 0.5;
           if (typ === 'TT') { color = 'red'; opacity = 1; }
-          if (typ === 'TN') { color = 'green'; opacity = 1; }
+          else if (typ === 'TN') { color = 'green'; opacity = 1; }
+
           return L.circleMarker(latlng, {
             radius: 6,
             color,
@@ -130,50 +127,52 @@
           }).bindPopup(`<strong>Netzform:</strong> ${typ || 'Unbekannt'}`);
         }
       });
-      map.addLayer(markerLayer);
+    }
+
+    async function loadAll() {
+      layerPLZ1 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-1stellig.geojson', '#999', 'plz1');
+      layerPLZ2 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-2stellig.geojson', '#666', 'plz2');
+      layerPLZ3 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-3stellig.geojson', '#444', 'plz3');
+      layerPLZ5 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#333', 'plz5');
+
+      await loadMarkers('https://christoph-staudacher.github.io/Netzkartendaten/Netzformen.geojson');
+
+      updateLayers();
       applyMarkerFilter();
-      updateLayersVisibility();
       updateDebugInfo();
     }
 
-    function countMarkersInPolygon(polygon, plz) {
-      let countAll = 0, countTT = 0, countTN = 0, countUnknown = 0;
-
-      markerLayer.eachLayer(marker => {
-        const latlng = marker.getLatLng();
-        if (polygon.getBounds().contains(latlng)) {
-          countAll++;
-          const typ = marker.feature.properties.netzform || '';
-          if (typ === 'TT') countTT++;
-          else if (typ === 'TN') countTN++;
-          else countUnknown++;
-        }
-      });
-
-      const base = countTT + countTN;
-      const ttPercent = base > 0 ? ((countTT / base) * 100).toFixed(1) : 'N/A';
-      document.getElementById('marker-info').innerText =
-        `In PLZ ${plz} sind ${countAll} Marker: TT = ${countTT}, TN = ${countTN}, Unbekannt = ${countUnknown} (TT-Anteil: ${ttPercent}%)`;
+    function inZoomRange(zoom, range) {
+      return zoom >= range[0] && zoom <= range[1];
     }
 
-    function zoomToPLZ() {
-      const input = document.getElementById('plzInput').value.trim();
-      const found = plzLayers.find(p => p.plz === input);
+    function updateLayers() {
+      const zoom = map.getZoom();
+      toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
+      toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
+      toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
+      toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
 
-      plzLayers.forEach(({ layer }) => {
-        if (layer.setStyle) {
-          layer.setStyle({ fillColor: 'transparent', fillOpacity: 0 });
+      if (markerLayer) {
+        if (inZoomRange(zoom, ZOOM_RANGE.markers)) {
+          if (!map.hasLayer(markerLayer)) map.addLayer(markerLayer);
+          applyMarkerFilter();
+        } else {
+          if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
         }
-      });
+      }
 
-      if (found) {
-        const bounds = found.layer.getBounds();
-        map.fitBounds(bounds, { maxZoom: 12 });
-        found.layer.openPopup();
-        found.layer.setStyle({ fillColor: 'yellow', fillOpacity: 0.3, color: '#333', weight: 2 });
-        countMarkersInPolygon(found.layer, found.plz);
+      updateTooltips();
+      updateDebugInfo();
+    }
+
+    function toggleLayer(layer, zoomRange) {
+      if (!layer) return;
+      const zoom = map.getZoom();
+      if (inZoomRange(zoom, zoomRange)) {
+        if (!map.hasLayer(layer)) map.addLayer(layer);
       } else {
-        alert('PLZ nicht gefunden oder noch nicht geladen.');
+        if (map.hasLayer(layer)) map.removeLayer(layer);
       }
     }
 
@@ -181,20 +180,12 @@
       const zoom = map.getZoom();
       const bounds = map.getBounds();
 
-      const getRangeForLayer = (layer) => {
-        if (plz1List.includes(layer)) return ZOOM_RANGE_PLZ1;
-        if (plz2List.includes(layer)) return ZOOM_RANGE_PLZ2;
-        if (plz3List.includes(layer)) return ZOOM_RANGE_PLZ3;
-        if (plz5List.includes(layer)) return ZOOM_RANGE_PLZ5;
-        return [];
-      };
+      plzFeatures.forEach(layer => {
+        const inRange = inZoomRange(zoom, ZOOM_RANGE[layer._plzKey]);
+        const visible = bounds.intersects(layer.getBounds());
 
-      plzLayers.forEach(({ layer }) => {
-        const range = getRangeForLayer(layer);
-        const isVisible = inRange(zoom, range) && bounds.intersects(layer.getBounds());
-
-        if (isVisible && !layer._tooltipAdded) {
-          layer.bindTooltip(layer._myPlz, {
+        if (inRange && visible && !layer._tooltipAdded) {
+          layer.bindTooltip(layer._plz, {
             permanent: true,
             direction: 'center',
             className: 'plz-label',
@@ -205,61 +196,65 @@
 
         if (layer.getTooltip()) {
           const el = layer.getTooltip().getElement();
-          if (el) el.style.display = isVisible ? 'block' : 'none';
+          if (el) el.style.display = (inRange && visible) ? 'block' : 'none';
         }
       });
     }
 
-    function updateLayersVisibility() {
-      const zoom = map.getZoom();
-
-      toggleLayer(layerPLZ1, ZOOM_RANGE_PLZ1);
-      toggleLayer(layerPLZ2, ZOOM_RANGE_PLZ2);
-      toggleLayer(layerPLZ3, ZOOM_RANGE_PLZ3);
-      toggleLayer(layerPLZ5, ZOOM_RANGE_PLZ5);
-
-      if (zoom >= MARKER_MIN_ZOOM) {
-        if (!map.hasLayer(markerLayer)) map.addLayer(markerLayer);
-        applyMarkerFilter();
-      } else if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
-
-      updateTooltips();
-      updateDebugInfo();
-    }
-
-    function toggleLayer(layer, range) {
-      if (!layer) return;
-      const zoom = map.getZoom();
-      if (inRange(zoom, range)) {
-        if (!map.hasLayer(layer)) map.addLayer(layer);
-      } else {
-        if (map.hasLayer(layer)) map.removeLayer(layer);
-      }
-    }
-
     function applyMarkerFilter() {
-      if (!markerLayer) return;
       const showUnknown = document.getElementById('unknownMarkerToggle').checked;
       markerLayer.eachLayer(layer => {
-        const typ = layer.feature.properties.netzform || '';
-        const visible = typ === 'TT' || typ === 'TN' || (typ === '' && showUnknown);
-        const opacity = visible ? (typ ? 1 : 0.5) : 0;
+        const typ = layer.feature.properties.Netzform || '';
+        const visible = (typ === 'TT' || typ === 'TN') || (typ === '' && showUnknown);
+        const opacity = visible ? 1 : 0;
         layer.setStyle({ opacity, fillOpacity: opacity });
       });
     }
 
-    function updateDebugInfo() {
-      document.getElementById('debug-info').innerText = `Geladen: PLZ1=${plz1List.length}, PLZ2=${plz2List.length}, PLZ3=${plz3List.length}, PLZ5=${plz5List.length}, Marker=${markerCount}`;
+    function zoomToPLZ() {
+      const input = document.getElementById('plzInput').value.trim();
+      plzFeatures.forEach(layer => {
+        layer.setStyle({ fillColor: 'transparent', fillOpacity: 0, color: '#000', weight: 1.5 });
+      });
+
+      const found = plzFeatures.find(l => l._plz === input);
+      if (found) {
+        map.fitBounds(found.getBounds(), { maxZoom: 12 });
+        found.openPopup();
+        found.setStyle({ fillColor: 'yellow', fillOpacity: 0.3, color: '#333', weight: 2 });
+
+        countMarkersInPolygon(found);
+      } else {
+        alert('PLZ nicht gefunden oder noch nicht geladen.');
+      }
     }
 
-    map.on('zoomend', updateLayersVisibility);
+    function countMarkersInPolygon(polygonLayer) {
+      const polygon = polygonLayer.getBounds();
+      let total = 0, tt = 0, tn = 0;
+      markerLayer.eachLayer(marker => {
+        const latlng = marker.getLatLng();
+        if (polygon.contains(latlng)) {
+          total++;
+          const typ = marker.feature.properties.Netzform;
+          if (typ === 'TT') tt++;
+          else if (typ === 'TN') tn++;
+        }
+      });
+
+      const ratio = tn > 0 ? ((tt / (tt + tn)) * 100).toFixed(1) : '0';
+      document.getElementById('marker-info').innerText =
+        `In ${polygonLayer._plz} sind ${total} Marker, davon ${tt} TT, ${tn} TN. TT-Anteil: ${ratio}%`;
+    }
+
+    function updateDebugInfo() {
+      document.getElementById('debug-info').innerText =
+        `Geladen: PLZ1=${plzCount.plz1}, PLZ2=${plzCount.plz2}, PLZ3=${plzCount.plz3}, PLZ5=${plzCount.plz5}, Marker=${markerCount}`;
+    }
+
+    map.on('zoomend', updateLayers);
     map.on('moveend', updateTooltips);
-
-    document.getElementById('unknownMarkerToggle').addEventListener('change', () => {
-      applyMarkerFilter();
-      updateLayersVisibility();
-    });
-
+    document.getElementById('unknownMarkerToggle').addEventListener('change', applyMarkerFilter);
     document.getElementById('plzInput').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
@@ -267,7 +262,7 @@
       }
     });
 
-    loadAllLayers();
+    loadAll();
   </script>
 </body>
 </html>
