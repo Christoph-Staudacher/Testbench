@@ -171,6 +171,7 @@
         if (map.hasLayer(layer)) map.removeLayer(layer);
       }
     }
+
     // Airtable API Abfrage mit Retry bei Rate Limit
     async function fetchPLZStatusWithRetry(plz, maxRetries = 5) {
       let tries = 0;
@@ -251,6 +252,7 @@
       });
       return layer;
     }
+
     // Lade Marker
     async function loadMarkers() {
       const res = await fetch(URLS.marker);
@@ -435,7 +437,7 @@
       setLoading(false);
       updatePLZFeaturesStatus(plz, status);
 
-      // Unter-PLZ (z.B. 99 → 990-999) nachladen und speichern
+      // Unter-PLZ (inkl. 5-stellig) nachladen und speichern
       await saveSubPLZ(plz, status);
     }
 
@@ -446,136 +448,131 @@
       const subPLZs = new Set();
 
       if (plz.length === 1) {
+        // 2-stellig
         for (let i = 0; i <= 9; i++) {
           subPLZs.add(plz + i);
+        }
+        // 5-stellig, z.B. "1" + "0000" bis "1" + "9999"
+        for (let i = 0; i <= 9999; i++) {
+          const p = plz + i.toString().padStart(4, '0');
+          subPLZs.add(p);
         }
       } else if (plz.length === 2) {
+        // 3-stellig
         for (let i = 0; i <= 9; i++) {
           subPLZs.add(plz + i);
+        }
+        // 5-stellig, z.B. "12" + "000" bis "12" + "999"
+        for (let i = 0; i <= 999; i++) {
+          const p = plz + i.toString().padStart(3, '0');
+          subPLZs.add(p);
         }
       } else if (plz.length === 3) {
-        for (let i = 0; i <= 9; i++) {
-          subPLZs.add(plz + i);
+        // 5-stellig
+        for (let i = 0; i <= 99; i++) {
+          const p = plz + i.toString().padStart(2, '0');
+          subPLZs.add(p);
         }
-      } else if (plz.length === 5) {
-        // Für 5-stellige PLZ vererben wir nicht weiter (kein Subplz)
-        return;
-      } else {
-        // Andere Längen keine SubPLZ
-        return;
       }
 
-      for (const candidate of subPLZs) {
-        if (plzStatusCache[candidate]) continue;
-        if (!loadingActive) return;
-
-        if (!plzExistsInLayers(candidate)) continue;
-
-        await saveOrUpdatePLZStatus(candidate, status);
-        await sleep(250);
-      }
-    }
-
-    // Prüfen ob PLZ in den geladenen Polygon-Layern existiert
-    function plzExistsInLayers(plz) {
-      return plzFeatures.some(layer => layer._plz === plz);
-    }
-
-    // Dynamisch Status der sichtbaren PLZ laden
-    async function loadVisiblePLZStatuses() {
-      if (!loadingActive) return;
-      setLoading(true, "Lade sichtbare PLZ-Status...");
-
-      const bounds = map.getBounds();
-      const zoom = map.getZoom();
-
-      // Nur PLZ-Layer anzeigen je Zoom, PLZ im Bounds filtern
-      const visiblePLZ = plzFeatures
-        .filter(layer => {
-          const inRange = inZoomRange(zoom, ZOOM_RANGE[layer._plzKey] || [0, 0]);
-          return inRange && bounds.intersects(layer.getBounds());
-        })
-        .map(layer => layer._plz);
-
-      const uniquePLZ = [...new Set(visiblePLZ)];
-
-      for (const plz of uniquePLZ) {
-        if (plzStatusCache[plz]) continue;
+      for (const subplz of subPLZs) {
         if (!loadingActive) break;
-
-        const statusRecord = await fetchPLZStatusWithRetry(plz);
-        if (statusRecord && statusRecord.status) {
-          plzStatusCache[plz] = { status: statusRecord.status, recordId: statusRecord.recordId };
-          updatePLZFeaturesStatus(plz, statusRecord.status);
-        }
+        await saveOrUpdatePLZStatus(subplz, status);
         await sleep(250);
       }
+    }
+
+    // Initialisierung und Laden aller Daten
+    async function init() {
+      setLoading(true, "Lade PLZ 1-stellig...");
+      layerPLZ1 = await loadPLZLayer(URLS.plz1, "plz1");
+      setLoading(true, "Lade PLZ 2-stellig...");
+      layerPLZ2 = await loadPLZLayer(URLS.plz2, "plz2");
+      setLoading(true, "Lade PLZ 3-stellig...");
+      layerPLZ3 = await loadPLZLayer(URLS.plz3, "plz3");
+      setLoading(true, "Lade PLZ 5-stellig...");
+      layerPLZ5 = await loadPLZLayer(URLS.plz5, "plz5");
+      setLoading(true, "Lade Marker...");
+      await loadMarkers();
+
+      // Alle Layer erst nicht anzeigen
+      [layerPLZ1, layerPLZ2, layerPLZ3, layerPLZ5].forEach(layer => {
+        if (map.hasLayer(layer)) map.removeLayer(layer);
+      });
+      if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
 
       setLoading(false);
-      updateDebugInfo();
-    }
-
-    // Initiale Ladefunktion
-    async function init() {
-      setLoading(true, "Lade PLZ-Daten...");
-      layerPLZ1 = await loadPLZLayer(URLS.plz1, "plz1");
-      layerPLZ2 = await loadPLZLayer(URLS.plz2, "plz2");
-      layerPLZ3 = await loadPLZLayer(URLS.plz3, "plz3");
-      layerPLZ5 = await loadPLZLayer(URLS.plz5, "plz5");
 
       attachStatusPopup();
-
-      map.addLayer(layerPLZ1);
-      map.addLayer(layerPLZ2);
-      map.addLayer(layerPLZ3);
-      map.addLayer(layerPLZ5);
-      map.addLayer(markerLayer);
-
-      await loadMarkers();
-      updateMarkerVisibility();
-
-      await loadVisiblePLZStatuses();
-
-      setLoading(false);
       updateDebugInfo();
+
+      // Sichtbarkeit erst nach Nutzerinteraktion (Zoom, Move)
+      updateVisibilityAndStatus();
+
+      // Event-Listener für Zoom und Bewegung
+      map.on("zoomend moveend", () => {
+        updateVisibilityAndStatus();
+      });
+
+      // Checkbox Events
+      document.getElementById("unknownMarkerToggle").addEventListener("change", updateMarkerVisibility);
+      document.getElementById("tttnMarkerToggle").addEventListener("change", updateMarkerVisibility);
+
+      // Stop & Restart Buttons
+      btnStop.addEventListener("click", () => {
+        loadingActive = false;
+        setLoading(false);
+        btnStop.disabled = true;
+        btnRestart.disabled = false;
+      });
+      btnRestart.addEventListener("click", () => {
+        location.reload();
+      });
     }
 
-    map.on("moveend zoomend", async () => {
+    // Sichtbarkeit der Layer und Marker setzen und Status aus Airtable laden
+    async function updateVisibilityAndStatus() {
+      const zoom = map.getZoom();
+      const bounds = map.getBounds();
+
       toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
       toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
       toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
       toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
+      toggleLayer(markerLayer, ZOOM_RANGE.markers);
 
-      if (inZoomRange(map.getZoom(), ZOOM_RANGE.markers)) {
-        if (!map.hasLayer(markerLayer)) map.addLayer(markerLayer);
-      } else {
-        if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
-      }
-
+      // PLZ Layer sind jetzt sichtbar? Marker entsprechend aktualisieren
       updateMarkerVisibility();
       updateTooltips();
 
-      await loadVisiblePLZStatuses();
-    });
+      // Status der sichtbaren PLZ abfragen und Cache füllen (auch bei Neustart)
+      if (!loadingActive) return;
 
-    document.getElementById("unknownMarkerToggle").addEventListener("change", updateMarkerVisibility);
-    document.getElementById("tttnMarkerToggle").addEventListener("change", updateMarkerVisibility);
+      // Prüfen alle sichtbaren PLZ Features
+      const visiblePLZs = new Set();
+      plzFeatures.forEach((layer) => {
+        if (!map.hasLayer(layer)) return;
+        if (!bounds.intersects(layer.getBounds())) return;
+        visiblePLZs.add(layer._plz);
+      });
 
-    btnStop.addEventListener("click", () => {
-      loadingActive = false;
+      // Status für alle sichtbaren PLZ anfragen, falls noch nicht im Cache
+      for (const plz of visiblePLZs) {
+        if (!loadingActive) break;
+        if (plzStatusCache[plz]) continue; // schon geladen
+        setLoading(true, `Lade Status PLZ ${plz}...`);
+        const data = await fetchPLZStatusWithRetry(plz);
+        if (data && data.status) {
+          plzStatusCache[plz] = { status: data.status };
+          updatePLZFeaturesStatus(plz, data.status);
+        }
+        await sleep(250);
+      }
       setLoading(false);
-      btnStop.disabled = true;
-      btnRestart.disabled = false;
-    });
+      updateDebugInfo();
+    }
 
-    btnRestart.addEventListener("click", () => {
-      loadingActive = true;
-      btnStop.disabled = false;
-      btnRestart.disabled = true;
-      loadVisiblePLZStatuses();
-    });
-
-    // Init Map und Daten
+    // Initialisiere Karte
     init();
   </script>
 </body>
