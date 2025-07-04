@@ -149,7 +149,6 @@
 
     // Steuerung Ladeprozess
     let loadingActive = true;
-    let currentLoadingTask = null;
 
     // UI-Elemente
     const debugText = document.getElementById("debug-text");
@@ -261,56 +260,41 @@
       // Status in Karte updaten
       updatePLZFeaturesStatus(plz, status);
 
-      // Zusätzliche untergeordnete PLZ erzeugen und speichern
-      await saveSubPLZ(plz, status);
+      // Untergeordnete PLZ speichern (nur tatsächlich vorhandene)
+      await saveSubPLZs(plz, status);
     }
 
-    // Hilfsfunktion zum Erzeugen und Speichern der untergeordneten PLZ
-    async function saveSubPLZ(plz, status) {
+    // Hilfsfunktion zum Erzeugen und Speichern der untergeordneten PLZ (nur existierende)
+    async function saveSubPLZs(plz, status) {
       if (!loadingActive) return;
 
-      // Nur wenn PLZ 2 oder 3 Stellen hat, entsprechende Bereiche erweitern
-      let plzNum = parseInt(plz);
-      if (isNaN(plzNum)) return;
+      const length = plz.length;
+      if (![1,2,3].includes(length)) return;
 
-      const subPLZs = new Set();
+      // Sammle alle mögliche Sub-PLZ, z.B. bei "99" alle "990"-"999"
+      let subPLZs = [];
 
-      if (plz.length === 2) {
-        // z.B. 99 -> 990..999
-        for (let i = 0; i <= 9; i++) {
-          const candidate = `${plz}${i}`;
-          subPLZs.add(candidate);
-        }
-      } else if (plz.length === 3) {
-        // z.B. 673 -> 6730..6739
-        for (let i = 0; i <= 9; i++) {
-          const candidate = `${plz}${i}`;
-          subPLZs.add(candidate);
-        }
-      } else if (plz.length === 1) {
-        // z.B. 6 -> 60..69
-        for (let i = 0; i <= 9; i++) {
-          const candidate = `${plz}${i}`;
-          subPLZs.add(candidate);
-        }
+      if (length === 1) {
+        // z.B. "9" => "90"-"99"
+        subPLZs = [...Array(10).keys()].map(i => plz + i);
+      } else if (length === 2) {
+        // z.B. "99" => "990"-"999"
+        subPLZs = [...Array(10).keys()].map(i => plz + i);
+      } else if (length === 3) {
+        // z.B. "673" => "6730"-"6739"
+        subPLZs = [...Array(10).keys()].map(i => plz + i);
       }
 
-      for (const candidate of subPLZs) {
-        if (plzStatusCache[candidate]) continue; // schon bekannt
+      // Filter: Nur die PLZ, die tatsächlich in plzFeatures geladen sind
+      const validSubPLZs = subPLZs.filter(sp => plzFeatures.some(layer => layer._plz === sp));
+
+      // Für jede gültige Sub-PLZ speichern/aktualisieren (wenn noch nicht im Cache)
+      for (const sub of validSubPLZs) {
+        if (plzStatusCache[sub]) continue;
         if (!loadingActive) return;
-
-        // Prüfen ob PLZ existiert in Layer, sonst überspringen
-        if (!plzExistsInLayers(candidate)) continue;
-
-        // Speichern mit gleichem Status
-        await saveOrUpdatePLZStatus(candidate, status);
-        await sleep(250); // Zwischen den Anfragen Pause
+        await saveOrUpdatePLZStatus(sub, status);
+        await sleep(250); // Pause wegen Rate Limit
       }
-    }
-
-    // Prüfen ob PLZ in einem der geladenen Polygon-Layer existiert
-    function plzExistsInLayers(plz) {
-      return plzFeatures.some(layer => layer._plz === plz);
     }
 
     // Update Style und Cache wenn Status geändert
@@ -360,7 +344,7 @@
               : "transparent";
           return { color: "#000", weight: 1.5, fillColor, fillOpacity: 0.5 };
         },
-        onEachFeature: async (feature, layer) => {
+        onEachFeature: (feature, layer) => {
           const plz = feature.properties.plz;
           layer._plz = plz;
           layer._plzKey = key;
@@ -393,6 +377,9 @@
         } else if (typ === "TN") {
           color = "green";
           opacity = 1;
+        } else if (typ === "MISCH") {
+          color = "orange";
+          opacity = 1;
         }
 
         const marker = L.circleMarker(latlng, {
@@ -422,7 +409,7 @@
 
         let visible = false;
         if (typ === "TT" || typ === "TN") visible = showTTTN;
-        else if (!typ) visible = showUnknown;
+        else if (!typ || typ === "UNBEKANNT") visible = showUnknown;
 
         marker.setStyle({
           opacity: visible ? 1 : 0,
@@ -486,7 +473,8 @@
           const popupContent = `
             <div>
               <strong>PLZ ${plz}</strong><br/>
-              Status:
+              Aktueller Status: <em>${currentStatus}</em><br/><br/>
+              Status setzen:
               <button class="status-button" data-status="TT">TT</button>
               <button class="status-button" data-status="TN">TN</button>
               <button class="status-button" data-status="Misch">Misch</button>
@@ -496,13 +484,18 @@
 
           layer.bindPopup(popupContent).openPopup();
 
-          // Warten auf DOM Update
+          // Warten auf DOM-Update, damit die Buttons existieren
           await sleep(100);
-          const buttons = layer.getPopup().getElement().querySelectorAll("button.status-button");
+
+          const popupEl = layer.getPopup().getElement();
+          const buttons = popupEl.querySelectorAll("button.status-button");
+
           buttons.forEach((btn) => {
             btn.addEventListener("click", async () => {
               const selectedStatus = btn.dataset.status;
+              setLoading(true, `Speichere Status für PLZ ${plz}...`);
               await saveOrUpdatePLZStatus(plz, selectedStatus);
+              setLoading(false);
               layer.closePopup();
             });
           });
