@@ -171,7 +171,6 @@
         if (map.hasLayer(layer)) map.removeLayer(layer);
       }
     }
-
     // Airtable API Abfrage mit Retry bei Rate Limit
     async function fetchPLZStatusWithRetry(plz, maxRetries = 5) {
       let tries = 0;
@@ -252,7 +251,6 @@
       });
       return layer;
     }
-
     // Lade Marker
     async function loadMarkers() {
       const res = await fetch(URLS.marker);
@@ -437,116 +435,148 @@
       setLoading(false);
       updatePLZFeaturesStatus(plz, status);
 
-      // Unter-PLZ (z.B. 8 → 80–89, 800–899, 80000–89999) nachladen und speichern
+      // Unter-PLZ (z.B. 99 → 990-999) nachladen und speichern
       await saveSubPLZ(plz, status);
     }
 
-    // Angepasste Funktion zum Erzeugen und Speichern der untergeordneten PLZ bis 5-stellig
+    // Hilfsfunktion zum Erzeugen und Speichern der untergeordneten PLZ
     async function saveSubPLZ(plz, status) {
       if (!loadingActive) return;
 
-      const queue = [plz];
-      const visited = new Set();
+      const subPLZs = new Set();
 
-      while (queue.length > 0) {
-        const currentPLZ = queue.shift();
-        if (visited.has(currentPLZ)) continue;
-        visited.add(currentPLZ);
-
-        // Status setzen (wenn nicht schon gesetzt)
-        if (!plzStatusCache[currentPLZ]) {
-          if (plzExistsInLayers(currentPLZ)) {
-            await saveOrUpdatePLZStatus(currentPLZ, status);
-            await sleep(250);
-          }
+      if (plz.length === 1) {
+        for (let i = 0; i <= 9; i++) {
+          subPLZs.add(plz + i);
         }
-
-        // Je nach Länge weitere Unter-PLZ generieren
-        if (currentPLZ.length === 1) {
-          // Von 1-stellig zu 2-stellig alle 10 Möglichkeiten (z.B. 8 → 80-89)
-          for (let i = 0; i <= 9; i++) {
-            const nextPLZ = currentPLZ + i;
-            if (!visited.has(nextPLZ)) queue.push(nextPLZ);
-          }
-        } else if (currentPLZ.length === 2) {
-          // Von 2-stellig zu 3-stellig alle 10 Möglichkeiten (z.B. 83 → 830-839)
-          for (let i = 0; i <= 9; i++) {
-            const nextPLZ = currentPLZ + i;
-            if (!visited.has(nextPLZ)) queue.push(nextPLZ);
-          }
-        } else if (currentPLZ.length === 3) {
-          // Von 3-stellig zu 5-stellig alle 100 Möglichkeiten (z.B. 830 → 83000-83099)
-          for (let i = 0; i <= 99; i++) {
-            const suffix = i.toString().padStart(2, "0");
-            const nextPLZ = currentPLZ + suffix;
-            if (!visited.has(nextPLZ)) queue.push(nextPLZ);
-          }
+      } else if (plz.length === 2) {
+        for (let i = 0; i <= 9; i++) {
+          subPLZs.add(plz + i);
         }
-        // Für 5-stellige keine Unter-PLZ weiter
+      } else if (plz.length === 3) {
+        for (let i = 0; i <= 9; i++) {
+          subPLZs.add(plz + i);
+        }
+      } else if (plz.length === 5) {
+        // Für 5-stellige PLZ vererben wir nicht weiter (kein Subplz)
+        return;
+      } else {
+        // Andere Längen keine SubPLZ
+        return;
+      }
+
+      for (const candidate of subPLZs) {
+        if (plzStatusCache[candidate]) continue;
+        if (!loadingActive) return;
+
+        if (!plzExistsInLayers(candidate)) continue;
+
+        await saveOrUpdatePLZStatus(candidate, status);
+        await sleep(250);
       }
     }
 
-    // Prüfen, ob PLZ im Layer geladen ist (um unnötige Anfragen zu vermeiden)
+    // Prüfen ob PLZ in den geladenen Polygon-Layern existiert
     function plzExistsInLayers(plz) {
-      return plzFeatures.some((layer) => layer._plz === plz);
+      return plzFeatures.some(layer => layer._plz === plz);
     }
 
-    // Initialisierung: Lade alle GeoJSON Daten und Marker
-    async function initialize() {
-      setLoading(true, "Lade 1-stellige PLZ...");
-      layerPLZ1 = await loadPLZLayer(URLS.plz1, "plz1");
-      setLoading(true, "Lade 2-stellige PLZ...");
-      layerPLZ2 = await loadPLZLayer(URLS.plz2, "plz2");
-      setLoading(true, "Lade 3-stellige PLZ...");
-      layerPLZ3 = await loadPLZLayer(URLS.plz3, "plz3");
-      setLoading(true, "Lade 5-stellige PLZ...");
-      layerPLZ5 = await loadPLZLayer(URLS.plz5, "plz5");
+    // Dynamisch Status der sichtbaren PLZ laden
+    async function loadVisiblePLZStatuses() {
+      if (!loadingActive) return;
+      setLoading(true, "Lade sichtbare PLZ-Status...");
 
-      setLoading(true, "Lade Marker...");
-      await loadMarkers();
+      const bounds = map.getBounds();
+      const zoom = map.getZoom();
 
-      map.addLayer(markerLayer);
+      // Nur PLZ-Layer anzeigen je Zoom, PLZ im Bounds filtern
+      const visiblePLZ = plzFeatures
+        .filter(layer => {
+          const inRange = inZoomRange(zoom, ZOOM_RANGE[layer._plzKey] || [0, 0]);
+          return inRange && bounds.intersects(layer.getBounds());
+        })
+        .map(layer => layer._plz);
 
-      attachStatusPopup();
+      const uniquePLZ = [...new Set(visiblePLZ)];
+
+      for (const plz of uniquePLZ) {
+        if (plzStatusCache[plz]) continue;
+        if (!loadingActive) break;
+
+        const statusRecord = await fetchPLZStatusWithRetry(plz);
+        if (statusRecord && statusRecord.status) {
+          plzStatusCache[plz] = { status: statusRecord.status, recordId: statusRecord.recordId };
+          updatePLZFeaturesStatus(plz, statusRecord.status);
+        }
+        await sleep(250);
+      }
 
       setLoading(false);
       updateDebugInfo();
-
-      toggleAllLayers();
-
-      map.on("zoomend moveend", () => {
-        toggleAllLayers();
-        updateMarkerVisibility();
-        updateTooltips();
-      });
-
-      document.getElementById("unknownMarkerToggle").addEventListener("change", updateMarkerVisibility);
-      document.getElementById("tttnMarkerToggle").addEventListener("change", updateMarkerVisibility);
-
-      btnStop.onclick = () => {
-        loadingActive = false;
-        setLoading(false);
-        btnStop.disabled = true;
-        btnRestart.disabled = false;
-      };
-      btnRestart.onclick = async () => {
-        if (!loadingActive) {
-          loadingActive = true;
-          btnStop.disabled = false;
-          btnRestart.disabled = true;
-          await initialize();
-        }
-      };
     }
 
-    function toggleAllLayers() {
+    // Initiale Ladefunktion
+    async function init() {
+      setLoading(true, "Lade PLZ-Daten...");
+      layerPLZ1 = await loadPLZLayer(URLS.plz1, "plz1");
+      layerPLZ2 = await loadPLZLayer(URLS.plz2, "plz2");
+      layerPLZ3 = await loadPLZLayer(URLS.plz3, "plz3");
+      layerPLZ5 = await loadPLZLayer(URLS.plz5, "plz5");
+
+      attachStatusPopup();
+
+      map.addLayer(layerPLZ1);
+      map.addLayer(layerPLZ2);
+      map.addLayer(layerPLZ3);
+      map.addLayer(layerPLZ5);
+      map.addLayer(markerLayer);
+
+      await loadMarkers();
+      updateMarkerVisibility();
+
+      await loadVisiblePLZStatuses();
+
+      setLoading(false);
+      updateDebugInfo();
+    }
+
+    map.on("moveend zoomend", async () => {
       toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
       toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
       toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
       toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
-    }
 
-    initialize();
+      if (inZoomRange(map.getZoom(), ZOOM_RANGE.markers)) {
+        if (!map.hasLayer(markerLayer)) map.addLayer(markerLayer);
+      } else {
+        if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
+      }
+
+      updateMarkerVisibility();
+      updateTooltips();
+
+      await loadVisiblePLZStatuses();
+    });
+
+    document.getElementById("unknownMarkerToggle").addEventListener("change", updateMarkerVisibility);
+    document.getElementById("tttnMarkerToggle").addEventListener("change", updateMarkerVisibility);
+
+    btnStop.addEventListener("click", () => {
+      loadingActive = false;
+      setLoading(false);
+      btnStop.disabled = true;
+      btnRestart.disabled = false;
+    });
+
+    btnRestart.addEventListener("click", () => {
+      loadingActive = true;
+      btnStop.disabled = false;
+      btnRestart.disabled = true;
+      loadVisiblePLZStatuses();
+    });
+
+    // Init Map und Daten
+    init();
   </script>
 </body>
 </html>
