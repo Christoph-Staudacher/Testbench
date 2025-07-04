@@ -477,104 +477,72 @@
 
     // Prüfen ob PLZ in den geladenen Polygon-Layern existiert
     function plzExistsInLayers(plz) {
-      return plzFeatures.some(layer => layer._plz === plz);
+      return plzFeatures.some((layer) => layer._plz === plz);
     }
 
-    // Dynamisch Status der sichtbaren PLZ laden
-    async function loadVisiblePLZStatuses() {
-      if (!loadingActive) return;
-      setLoading(true, "Lade sichtbare PLZ-Status...");
-
-      const bounds = map.getBounds();
-      const zoom = map.getZoom();
-
-      // Nur PLZ-Layer anzeigen je Zoom, PLZ im Bounds filtern
-      const visiblePLZ = plzFeatures
-        .filter(layer => {
-          const inRange = inZoomRange(zoom, ZOOM_RANGE[layer._plzKey] || [0, 0]);
-          return inRange && bounds.intersects(layer.getBounds());
-        })
-        .map(layer => layer._plz);
-
-      const uniquePLZ = [...new Set(visiblePLZ)];
-
-      for (const plz of uniquePLZ) {
-        if (plzStatusCache[plz]) continue;
-        if (!loadingActive) break;
-
-        const statusRecord = await fetchPLZStatusWithRetry(plz);
-        if (statusRecord && statusRecord.status) {
-          plzStatusCache[plz] = { status: statusRecord.status, recordId: statusRecord.recordId };
-          updatePLZFeaturesStatus(plz, statusRecord.status);
-        }
-        await sleep(250);
-      }
-
-      setLoading(false);
-      updateDebugInfo();
-    }
-
-    // Initiale Ladefunktion
+    // Initialisierung der Karte und Daten
     async function init() {
-      setLoading(true, "Lade PLZ-Daten...");
+      setLoading(true, "Lade PLZ 1-stellig...");
       layerPLZ1 = await loadPLZLayer(URLS.plz1, "plz1");
+      setLoading(true, "Lade PLZ 2-stellig...");
       layerPLZ2 = await loadPLZLayer(URLS.plz2, "plz2");
+      setLoading(true, "Lade PLZ 3-stellig...");
       layerPLZ3 = await loadPLZLayer(URLS.plz3, "plz3");
+      setLoading(true, "Lade PLZ 5-stellig...");
       layerPLZ5 = await loadPLZLayer(URLS.plz5, "plz5");
+
+      setLoading(true, "Lade Marker...");
+      await loadMarkers();
+
+      // Layer und Marker initial zur Karte hinzufügen, damit toggleLayer zuverlässig arbeitet
+      layerPLZ1.addTo(map);
+      layerPLZ2.addTo(map);
+      layerPLZ3.addTo(map);
+      layerPLZ5.addTo(map);
+      markerLayer.addTo(map);
+
+      // Zoomend-Event manuell triggern, damit alle Sichtbarkeiten korrekt initialisiert werden
+      map.fire("zoomend");
 
       attachStatusPopup();
 
-      map.addLayer(layerPLZ1);
-      map.addLayer(layerPLZ2);
-      map.addLayer(layerPLZ3);
-      map.addLayer(layerPLZ5);
-      map.addLayer(markerLayer);
-
-      await loadMarkers();
-      updateMarkerVisibility();
-
-      await loadVisiblePLZStatuses();
-
       setLoading(false);
       updateDebugInfo();
     }
 
-    map.on("moveend zoomend", async () => {
+    // Event-Listener für Zoom-Ende
+    map.on("zoomend", () => {
       toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
       toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
       toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
       toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
-
-      if (inZoomRange(map.getZoom(), ZOOM_RANGE.markers)) {
-        if (!map.hasLayer(markerLayer)) map.addLayer(markerLayer);
-      } else {
-        if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
-      }
-
       updateMarkerVisibility();
       updateTooltips();
-
-      await loadVisiblePLZStatuses();
     });
 
-    document.getElementById("unknownMarkerToggle").addEventListener("change", updateMarkerVisibility);
-    document.getElementById("tttnMarkerToggle").addEventListener("change", updateMarkerVisibility);
+    // Event-Listener für Checkboxen
+    document.getElementById("unknownMarkerToggle").addEventListener("change", () => {
+      updateMarkerVisibility();
+    });
+    document.getElementById("tttnMarkerToggle").addEventListener("change", () => {
+      updateMarkerVisibility();
+    });
 
+    // Steuerung Buttons laden stoppen/neuladen
     btnStop.addEventListener("click", () => {
       loadingActive = false;
       setLoading(false);
       btnStop.disabled = true;
       btnRestart.disabled = false;
+      loadingText.textContent = "Laden gestoppt.";
     });
-
     btnRestart.addEventListener("click", () => {
       loadingActive = true;
       btnStop.disabled = false;
       btnRestart.disabled = true;
-      loadVisiblePLZStatuses();
+      init();
     });
 
-    // Init Map und Daten
     init();
   </script>
 </body>
