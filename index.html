@@ -152,20 +152,16 @@
     function sleep(ms) {
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
-
     function inZoomRange(zoom, range) {
       return zoom >= range[0] && zoom <= range[1];
     }
-
     function setLoading(isLoading, message = "") {
       loadingSpinner.style.display = isLoading ? "inline-block" : "none";
       loadingText.textContent = isLoading ? message : "";
     }
-
     function updateDebugInfo() {
       debugText.textContent = `PLZ1=${plzCount.plz1}, PLZ2=${plzCount.plz2}, PLZ3=${plzCount.plz3}, PLZ5=${plzCount.plz5}, Marker=${markerCount}`;
     }
-
     function toggleLayer(layer, range) {
       if (!layer) return;
       const zoom = map.getZoom();
@@ -226,6 +222,7 @@
       });
       updateMarkerVisibility();
     }
+
     // Lade PLZ Layer
     async function loadPLZLayer(url, key) {
       const res = await fetch(url);
@@ -341,6 +338,25 @@
       });
     }
 
+    // Zoom und Highlight für Such-PLZ
+    function zoomToPLZ() {
+      const input = document.getElementById("plzInput").value.trim();
+
+      plzFeatures.forEach((layer) => {
+        layer.setStyle({ fillColor: "transparent", fillOpacity: 0, color: "#000", weight: 1.5 });
+      });
+
+      const found = plzFeatures.find((l) => l._plz === input);
+
+      if (found) {
+        map.fitBounds(found.getBounds(), { maxZoom: 12 });
+        found.openPopup();
+        found.setStyle({ fillColor: "yellow", fillOpacity: 0.7, color: "#444", weight: 3 });
+      } else {
+        alert("PLZ nicht gefunden.");
+      }
+    }
+
     // Popup mit Netzform-Auswahl bei Klick auf Polygon
     function attachStatusPopup() {
       plzFeatures.forEach((layer) => {
@@ -421,11 +437,11 @@
       setLoading(false);
       updatePLZFeaturesStatus(plz, status);
 
-      // Unter-PLZ (z.B. 99 → 990-999) nachladen und speichern
+      // Unter-PLZ (z.B. 99 → 990-999) nachladen und speichern (nur bis 3-stellig)
       await saveSubPLZ(plz, status);
     }
 
-    // Hilfsfunktion zum Erzeugen und Speichern der untergeordneten PLZ mit Prüfung auf Existenz
+    // Hilfsfunktion zum Erzeugen und Speichern der untergeordneten PLZ
     async function saveSubPLZ(plz, status) {
       if (!loadingActive) return;
 
@@ -443,20 +459,14 @@
         for (let i = 0; i <= 9; i++) {
           subPLZs.add(plz + i);
         }
-      } else if (plz.length === 5) {
-        // Für 5-stellige PLZ: evtl. Vererbung zu 5er Unternummern ist hier normalerweise nicht nötig,
-        // kann aber falls gewünscht, nach eigener Logik ergänzt werden.
-        // Hier keine Unter-PLZ generieren.
-        return;
       } else {
-        // Keine Unter-PLZ für andere Längen
+        // Keine Vererbung bei 5-stelligen PLZ oder anderen Längen
         return;
       }
 
       for (const candidate of subPLZs) {
         if (plzStatusCache[candidate]) continue;
         if (!loadingActive) return;
-
         if (!plzExistsInLayers(candidate)) continue;
 
         await saveOrUpdatePLZStatus(candidate, status);
@@ -464,126 +474,114 @@
       }
     }
 
-    // Prüfen ob PLZ in den geladenen Polygon-Layern existiert
+    // Prüfen ob PLZ in den geladenen Layers existiert
     function plzExistsInLayers(plz) {
-      return plzFeatures.some(layer => layer._plz === plz);
+      return plzFeatures.some((layer) => layer._plz === plz);
     }
-    // Dynamisch Status der sichtbaren PLZ laden
+
+    // Lade Status der sichtbaren PLZ aus Airtable (bei Kartenbewegung)
     async function loadVisiblePLZStatuses() {
       if (!loadingActive) return;
       setLoading(true, "Lade sichtbare PLZ-Status...");
 
-      const bounds = map.getBounds();
       const zoom = map.getZoom();
+      const bounds = map.getBounds();
 
-      // Nur PLZ-Layer anzeigen je Zoom, PLZ im Bounds filtern
+      // Filtere alle PLZ-Features, die im Zoombereich sind UND auf der Karte sichtbar (Bounds schnitt)
       const visiblePLZ = plzFeatures
-        .filter(layer => {
-          const inRange = inZoomRange(zoom, ZOOM_RANGE[layer._plzKey] || [0, 0]);
-          return inRange && bounds.intersects(layer.getBounds());
+        .filter((layer) => {
+          return (
+            inZoomRange(zoom, ZOOM_RANGE[layer._plzKey] || [0, 0]) &&
+            bounds.intersects(layer.getBounds())
+          );
         })
-        .map(layer => layer._plz);
+        .map((layer) => layer._plz);
 
-      const uniquePLZ = [...new Set(visiblePLZ)];
-
-      for (const plz of uniquePLZ) {
-        if (plzStatusCache[plz]) continue;
+      // Lade Status seriell mit Pause (Airtable Limits)
+      for (const plz of visiblePLZ) {
         if (!loadingActive) break;
+        if (plzStatusCache[plz]) continue;
 
         const statusRecord = await fetchPLZStatusWithRetry(plz);
-        if (statusRecord && statusRecord.status) {
-          plzStatusCache[plz] = { status: statusRecord.status, recordId: statusRecord.recordId };
-          updatePLZFeaturesStatus(plz, statusRecord.status);
-        }
+        if (!loadingActive) break;
+        const status = statusRecord?.status || "unbekannt";
+
+        plzStatusCache[plz] = { status };
+        updatePLZFeaturesStatus(plz, status);
+
         await sleep(250);
       }
 
       setLoading(false);
-      updateDebugInfo();
     }
 
-    // Zoom und Highlight für Such-PLZ
-    function zoomToPLZ() {
-      const input = document.getElementById("plzInput").value.trim();
-
-      plzFeatures.forEach((layer) => {
-        layer.setStyle({ fillColor: "transparent", fillOpacity: 0, color: "#000", weight: 1.5 });
-      });
-
-      const found = plzFeatures.find((l) => l._plz === input);
-
-      if (found) {
-        map.fitBounds(found.getBounds(), { maxZoom: 12 });
-        found.openPopup();
-        found.setStyle({ fillColor: "yellow", fillOpacity: 0.7, color: "#444", weight: 3 });
-      } else {
-        alert("PLZ nicht gefunden.");
-      }
-    }
-
-    // Initiale Ladefunktion
-    async function init() {
-      setLoading(true, "Lade PLZ-Daten...");
-      layerPLZ1 = await loadPLZLayer(URLS.plz1, "plz1");
-      layerPLZ2 = await loadPLZLayer(URLS.plz2, "plz2");
-      layerPLZ3 = await loadPLZLayer(URLS.plz3, "plz3");
-      layerPLZ5 = await loadPLZLayer(URLS.plz5, "plz5");
-
-      attachStatusPopup();
-
-      // Nur Layer hinzufügen, die im Startzoom sichtbar sein sollen
+    // Eventhandler Karte Zoom & Bewegung
+    map.on("zoomend moveend", () => {
       toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
       toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
       toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
       toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
+      toggleLayer(markerLayer, ZOOM_RANGE.markers);
 
-      map.addLayer(markerLayer);
-
-      await loadMarkers();
-      updateMarkerVisibility();
-
-      await loadVisiblePLZStatuses();
-
-      setLoading(false);
-      updateDebugInfo();
-    }
-
-    // Event Listener für Map Bewegung und Zoom
-    map.on("moveend zoomend", async () => {
-      toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
-      toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
-      toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
-      toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
-
-      if (inZoomRange(map.getZoom(), ZOOM_RANGE.markers)) {
-        if (!map.hasLayer(markerLayer)) map.addLayer(markerLayer);
-      } else {
-        if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
-      }
-
-      updateMarkerVisibility();
       updateTooltips();
+      updateMarkerVisibility();
 
-      await loadVisiblePLZStatuses();
+      loadVisiblePLZStatuses();
     });
 
+    // Checkbox Eventhandler
     document.getElementById("unknownMarkerToggle").addEventListener("change", updateMarkerVisibility);
     document.getElementById("tttnMarkerToggle").addEventListener("change", updateMarkerVisibility);
 
+    // Stop & Restart Buttons
     btnStop.addEventListener("click", () => {
       loadingActive = false;
       setLoading(false);
       btnStop.disabled = true;
       btnRestart.disabled = false;
     });
-
     btnRestart.addEventListener("click", () => {
       loadingActive = true;
       btnStop.disabled = false;
       btnRestart.disabled = true;
-      loadVisiblePLZStatuses();
+      loadAllData();
     });
 
-    // Init Map und Daten
-    init();
+    // Gesamtes Laden der Daten
+    async function loadAllData() {
+      setLoading(true, "Lade 1-stellige PLZ...");
+      layerPLZ1 = await loadPLZLayer(URLS.plz1, "plz1");
+      setLoading(true, "Lade 2-stellige PLZ...");
+      layerPLZ2 = await loadPLZLayer(URLS.plz2, "plz2");
+      setLoading(true, "Lade 3-stellige PLZ...");
+      layerPLZ3 = await loadPLZLayer(URLS.plz3, "plz3");
+      setLoading(true, "Lade 5-stellige PLZ...");
+      layerPLZ5 = await loadPLZLayer(URLS.plz5, "plz5");
+
+      markerLayer.clearLayers();
+      await loadMarkers();
+
+      // Layer nicht sofort hinzufügen, sondern erst nach Zoom prüfen
+      toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
+      toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
+      toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
+      toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
+      toggleLayer(markerLayer, ZOOM_RANGE.markers);
+
+      // Alle Polygon Popup-Events anhängen
+      attachStatusPopup();
+
+      updateDebugInfo();
+      setLoading(false);
+
+      // Status sichtbarer PLZ nachladen
+      await loadVisiblePLZStatuses();
+
+      updateDebugInfo();
+    }
+
+    loadAllData();
+
   </script>
+</body>
+</html>
