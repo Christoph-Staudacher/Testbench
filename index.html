@@ -45,6 +45,7 @@
     <input type="text" id="plzInput" placeholder="z.B. 83052" />
     <button onclick="zoomToPLZ()">Suchen</button>
     <label><input type="checkbox" id="unknownMarkerToggle" /> Unbekannte Marker anzeigen</label>
+    <label><input type="checkbox" id="tttnMarkerToggle" checked /> Marker in TT/TN-PLZ anzeigen</label>
     <div id="marker-info"></div>
     <div id="debug-info"></div>
   </div>
@@ -74,6 +75,20 @@
     let plzCount = { plz1: 0, plz2: 0, plz3: 0, plz5: 0 };
     window.plzStatusCache = {};
 
+    function inZoomRange(zoom, range) {
+      return zoom >= range[0] && zoom <= range[1];
+    }
+
+    function toggleLayer(layer, zoomRange) {
+      if (!layer) return;
+      const zoom = map.getZoom();
+      if (inZoomRange(zoom, zoomRange)) {
+        if (!map.hasLayer(layer)) map.addLayer(layer);
+      } else {
+        if (map.hasLayer(layer)) map.removeLayer(layer);
+      }
+    }
+
     async function fetchPLZStatusFromAirtable(plz) {
       const url = `https://api.airtable.com/v0/${AIRTABLE_BASE}/${encodeURIComponent(AIRTABLE_TABLE)}?filterByFormula={PLZ}='${plz}'`;
       const res = await fetch(url, {
@@ -83,37 +98,55 @@
       return json.records[0]?.fields || null;
     }
 
-    const airtableQueue = [];
-    let airtableProcessing = false;
-
-    function enqueueAirtableFetch(plz, resolve) {
-      airtableQueue.push({ plz, resolve });
-      if (!airtableProcessing) processAirtableQueue();
-    }
-
-    async function processAirtableQueue() {
-      airtableProcessing = true;
-      while (airtableQueue.length) {
-        const { plz, resolve } = airtableQueue.shift();
-        const result = await fetchPLZStatusFromAirtable(plz);
-        resolve(result);
-        await new Promise(r => setTimeout(r, 250));
-      }
-      airtableProcessing = false;
+    function generatePopupContent(plz, status) {
+      return `<strong>PLZ:</strong> ${plz}<br>Status: ${status || 'unbekannt'}<br>
+        <button class='status-button' onclick="setPLZStatus('${plz}', 'TT')">TT</button>
+        <button class='status-button' onclick="setPLZStatus('${plz}', 'TN')">TN</button>
+        <button class='status-button' onclick="setPLZStatus('${plz}', 'Misch')">Misch</button>`;
     }
 
     async function loadPLZLayer(url, color, plzKey) {
       const res = await fetch(url);
       const data = await res.json();
       plzCount[plzKey] = data.features.length;
-
-      return L.geoJSON(data, {
+      const layer = L.geoJSON(data, {
         style: feature => ({ color: '#000', weight: 1.5, fillColor: 'transparent', fillOpacity: 0.5 }),
-        onEachFeature: (feature, layer) => {
+        onEachFeature: async (feature, l) => {
           const plz = feature.properties.plz || '';
-          layer._plz = plz;
-          layer._plzKey = plzKey;
-          plzFeatures.push(layer);
+          l._plz = plz;
+          l._plzKey = plzKey;
+          plzFeatures.push(l);
+          const airtableData = await fetchPLZStatusFromAirtable(plz);
+          const status = airtableData?.status || 'unbekannt';
+          const fillColor = status === 'TT' ? 'rgba(255,0,0,0.5)' :
+                            status === 'TN' ? 'rgba(0,255,0,0.5)' :
+                            status === 'Misch' ? 'rgba(255,165,0,0.5)' : 'transparent';
+          l.setStyle({ fillColor, fillOpacity: 0.5 });
+          l.bindPopup(generatePopupContent(plz, status));
+          l.bindTooltip(plz, { permanent: true, direction: 'center', className: 'plz-label' });
+        }
+      });
+      return layer;
+    }
+
+    async function setPLZStatus(plz, status) {
+      const body = JSON.stringify({ fields: { PLZ: plz, status: status } });
+      await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${AIRTABLE_API_KEY}`
+        },
+        body: body
+      });
+      window.plzStatusCache[plz] = { status };
+      plzFeatures.forEach(layer => {
+        if (layer._plz === plz || (status !== 'Misch' && layer._plz.startsWith(plz) && plz.length < layer._plz.length)) {
+          const fillColor = status === 'TT' ? 'rgba(255,0,0,0.5)' :
+                            status === 'TN' ? 'rgba(0,255,0,0.5)' :
+                            status === 'Misch' ? 'rgba(255,165,0,0.5)' : 'transparent';
+          layer.setStyle({ fillColor, fillOpacity: 0.5 });
+          layer.bindPopup(generatePopupContent(plz, status));
         }
       });
     }
@@ -143,68 +176,24 @@
       });
     }
 
-    function generatePopupContent(plz, status) {
-      return `<strong>PLZ:</strong> ${plz}<br>Status: ${status || 'unbekannt'}<br>
-        <button class='status-button' onclick="setPLZStatus('${plz}', 'TT')">TT</button>
-        <button class='status-button' onclick="setPLZStatus('${plz}', 'TN')">TN</button>
-        <button class='status-button' onclick="setPLZStatus('${plz}', 'Misch')">Misch</button>`;
-    }
-
-    async function fetchVisiblePLZStatuses() {
-      const bounds = map.getBounds();
-      const zoom = map.getZoom();
-
-      for (const layer of plzFeatures) {
-        const visible = bounds.intersects(layer.getBounds());
-        const zoomInRange = ZOOM_RANGE[layer._plzKey] && zoom >= ZOOM_RANGE[layer._plzKey][0];
-
-        if (visible && zoomInRange) {
-          const plz = layer._plz;
-          if (!window.plzStatusCache[plz]) {
-            const airtableData = await new Promise(r => enqueueAirtableFetch(plz, r));
-            if (airtableData) {
-              window.plzStatusCache[plz] = airtableData;
-              const status = airtableData.status;
-              const fillColor = status === 'TT' ? 'rgba(255,0,0,0.5)' :
-                                status === 'TN' ? 'rgba(0,255,0,0.5)' :
-                                status === 'Misch' ? 'rgba(255,165,0,0.5)' :
-                                'transparent';
-              layer.setStyle({ fillColor, fillOpacity: 0.5 });
-              layer.bindPopup(generatePopupContent(plz, status));
-              layer.bindTooltip(plz, { permanent: true, direction: 'center', className: 'plz-label' });
-            }
-          }
-        }
-      }
-    }
-
-    async function setPLZStatus(plz, status) {
-      const body = JSON.stringify({ fields: { PLZ: plz, status: status } });
-      await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AIRTABLE_API_KEY}` },
-        body: body
-      });
-      window.plzStatusCache[plz] = { status };
-      plzFeatures.forEach(layer => {
-        if (layer._plz === plz || (status !== 'Misch' && layer._plz.startsWith(plz) && plz.length < layer._plz.length)) {
-          const fillColor = status === 'TT' ? 'rgba(255,0,0,0.5)' :
-                            status === 'TN' ? 'rgba(0,255,0,0.5)' :
-                            status === 'Misch' ? 'rgba(255,165,0,0.5)' :
-                            'transparent';
-          layer.setStyle({ fillColor, fillOpacity: 0.5 });
-          layer.bindPopup(generatePopupContent(plz, status));
-        }
+    function updateMarkerVisibility() {
+      const showKnown = document.getElementById('tttnMarkerToggle').checked;
+      const showUnknown = document.getElementById('unknownMarkerToggle').checked;
+      if (!markerLayer) return;
+      markerLayer.eachLayer(layer => {
+        const typ = (layer.feature.properties.Netzform || '').trim().toUpperCase();
+        let visible = false;
+        if (typ === 'TT' || typ === 'TN') visible = showKnown;
+        else visible = showUnknown;
+        layer.setStyle({ opacity: visible ? 1 : 0, fillOpacity: visible ? 0.5 : 0 });
       });
     }
 
     function zoomToPLZ() {
       const input = document.getElementById('plzInput').value.trim();
-
       plzFeatures.forEach(layer => {
         layer.setStyle({ fillColor: 'transparent', fillOpacity: 0, color: '#000', weight: 1.5 });
       });
-
       const found = plzFeatures.find(l => l._plz === input);
       if (found) {
         map.fitBounds(found.getBounds(), { maxZoom: 12 });
@@ -221,22 +210,35 @@
       layerPLZ2 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-2stellig.geojson', '#666', 'plz2');
       layerPLZ3 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-3stellig.geojson', '#444', 'plz3');
       layerPLZ5 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#333', 'plz5');
-      map.addLayer(layerPLZ1);
-      map.addLayer(layerPLZ2);
-      map.addLayer(layerPLZ3);
-      map.addLayer(layerPLZ5);
 
       await loadMarkers('https://christoph-staudacher.github.io/Netzkartendaten/Netzformen.geojson');
-      if (markerLayer) map.addLayer(markerLayer);
+
+      map.on('zoomend', () => {
+        toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
+        toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
+        toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
+        toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
+        if (markerLayer) toggleLayer(markerLayer, ZOOM_RANGE.markers);
+        updateMarkerVisibility();
+      });
+
+      toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
+      toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
+      toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
+      toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
+      if (markerLayer) toggleLayer(markerLayer, ZOOM_RANGE.markers);
+      updateMarkerVisibility();
     }
 
-    map.on('moveend', fetchVisiblePLZStatuses);
     document.getElementById('plzInput').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
         zoomToPLZ();
       }
     });
+
+    document.getElementById('unknownMarkerToggle').addEventListener('change', updateMarkerVisibility);
+    document.getElementById('tttnMarkerToggle').addEventListener('change', updateMarkerVisibility);
 
     loadAll();
   </script>
