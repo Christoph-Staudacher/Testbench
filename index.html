@@ -6,12 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <style>
-    html, body {
-      margin: 0; padding: 0; height: 100%;
-    }
-    #map {
-      width: 100%; height: 90vh;
-    }
+    html, body { margin: 0; padding: 0; height: 100%; }
+    #map { width: 100%; height: 90vh; }
     #plz-search {
       padding: 10px;
       background: #f8f8f8;
@@ -40,6 +36,17 @@
       text-align: left;
       margin-top: 5px;
     }
+    .status-button {
+      margin: 2px;
+      padding: 3px 5px;
+      font-size: 11px;
+      cursor: pointer;
+      border: 1px solid #999;
+      background: #eee;
+    }
+    #markerToggleTTTN {
+      margin-left: 10px;
+    }
   </style>
 </head>
 <body>
@@ -48,10 +55,10 @@
     <input type="text" id="plzInput" placeholder="z.B. 83052" />
     <button onclick="zoomToPLZ()">Suchen</button>
 
-    <label>
-      <input type="checkbox" id="unknownMarkerToggle" />
-      Unbekannte Marker anzeigen
-    </label>
+    <label><input type="checkbox" id="unknownMarkerToggle" /> Unbekannte Marker anzeigen</label>
+    <label><input type="checkbox" id="tttnMarkerToggle" checked /> Marker in TT/TN-PLZ anzeigen</label>
+
+    <button onclick="refreshAirtableData()">PLZ-Daten neu laden</button>
 
     <div id="marker-info"></div>
     <div id="debug-info"></div>
@@ -68,46 +75,90 @@
     }).addTo(map);
 
     const ZOOM_RANGE = {
-      plz1: [6, 7],
-      plz2: [8, 9],
-      plz3: [10, 11],
-      plz5: [12, 20],
-      markers: [9, 20],
+      plz1: [6, 7], plz2: [8, 9], plz3: [10, 11], plz5: [12, 20], markers: [9, 20]
     };
 
     let layerPLZ1, layerPLZ2, layerPLZ3, layerPLZ5;
     let markerLayer;
-
     const plzFeatures = [];
     let markerCount = 0;
     let plzCount = { plz1: 0, plz2: 0, plz3: 0, plz5: 0 };
 
-    function inZoomRange(zoom, range) {
-      return zoom >= range[0] && zoom <= range[1];
+    window.plzStatusCache = {};
+
+    async function fetchPLZStatusFromAirtable(plz) {
+      const response = await fetch(`https://api.airtable.com/v0/appGh6rEXtCNMCrWh/PLZ Status?filterByFormula={PLZ}='${plz}'`, {
+        headers: { Authorization: 'Bearer patlyiYzU6HAMUiY9.7cfef1ea6fc2a5cd9cc3acebf1347fd04ba1e1d7dd60e9acc7bb77c0caa72f78' }
+      });
+      const json = await response.json();
+      return json.records[0]?.fields || null;
+    }
+
+    async function savePLZStatusToAirtable(plz, status) {
+      const body = JSON.stringify({ fields: { PLZ: plz, status: status } });
+      await fetch(`https://api.airtable.com/v0/appGh6rEXtCNMCrWh/PLZ Status`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer patlyiYzU6HAMUiY9.7cfef1ea6fc2a5cd9cc3acebf1347fd04ba1e1d7dd60e9acc7bb77c0caa72f78'
+        },
+        body: body
+      });
+      window.plzStatusCache[plz] = { status };
     }
 
     async function loadPLZLayer(url, color, plzKey) {
       const res = await fetch(url);
       const data = await res.json();
       plzCount[plzKey] = data.features.length;
+
       return L.geoJSON(data, {
-        style: {
-          color: color,
-          weight: 2,
-          fillOpacity: 0,
-        },
-        onEachFeature: (feature, layer) => {
+        style: feature => {
           const plz = feature.properties.plz || '';
-          const einw = feature.properties.einwohner || 'k.A.';
-          const note = feature.properties.note || '';
-
-          layer.bindPopup(`<strong>PLZ:</strong> ${plz}<br><strong>Einwohner:</strong> ${einw}<br><em>${note}</em>`);
-
+          const status = window.plzStatusCache[plz]?.status || 'unbekannt';
+          const fillColor = status === 'TT' ? 'rgba(255,0,0,0.5)' :
+                             status === 'TN' ? 'rgba(0,255,0,0.5)' :
+                             status === 'Misch' ? 'rgba(255,165,0,0.5)' :
+                             'transparent';
+          return { color: '#000', weight: 1.5, fillColor, fillOpacity: 0.5 };
+        },
+        onEachFeature: async (feature, layer) => {
+          const plz = feature.properties.plz || '';
           layer._plz = plz;
           layer._plzKey = plzKey;
           layer._tooltipAdded = false;
 
+          if (!window.plzStatusCache[plz]) {
+            const airtableData = await fetchPLZStatusFromAirtable(plz);
+            if (airtableData) window.plzStatusCache[plz] = airtableData;
+          }
+
+          const currentStatus = window.plzStatusCache[plz]?.status || 'unbekannt';
+
+          const popupContent = `<strong>PLZ:</strong> ${plz}<br>Status: ${currentStatus}<br>
+            <button class='status-button' onclick="setPLZStatus('${plz}', 'TT')">TT</button>
+            <button class='status-button' onclick="setPLZStatus('${plz}', 'TN')">TN</button>
+            <button class='status-button' onclick="setPLZStatus('${plz}', 'Misch')">Misch</button>`;
+
+          layer.bindPopup(popupContent);
           plzFeatures.push(layer);
+        }
+      });
+    }
+
+    async function setPLZStatus(plz, status) {
+      await savePLZStatusToAirtable(plz, status);
+      plzFeatures.forEach(layer => {
+        if (layer._plz === plz ||
+            (status !== 'Misch' && layer._plz.startsWith(plz) && plz.length < layer._plz.length)) {
+          window.plzStatusCache[layer._plz] = { status };
+          layer.setStyle({
+            fillColor: status === 'TT' ? 'rgba(255,0,0,0.5)' :
+                       status === 'TN' ? 'rgba(0,255,0,0.5)' :
+                       status === 'Misch' ? 'rgba(255,165,0,0.5)' :
+                       'transparent',
+            fillOpacity: 0.5
+          });
         }
       });
     }
@@ -137,147 +188,14 @@
       });
     }
 
-    async function loadAll() {
-      layerPLZ1 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-1stellig.geojson', '#999', 'plz1');
-      layerPLZ2 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-2stellig.geojson', '#666', 'plz2');
-      layerPLZ3 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-3stellig.geojson', '#444', 'plz3');
-      layerPLZ5 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#333', 'plz5');
-
-      await loadMarkers('https://christoph-staudacher.github.io/Netzkartendaten/Netzformen.geojson');
-
-      updateLayers();
-      applyMarkerFilter();
-      updateDebugInfo();
-    }
-
-    function updateLayers() {
-      const zoom = map.getZoom();
-
-      toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
-      toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
-      toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
-      toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
-
-      if (markerLayer) {
-        if (inZoomRange(zoom, ZOOM_RANGE.markers)) {
-          if (!map.hasLayer(markerLayer)) map.addLayer(markerLayer);
-          applyMarkerFilter();
-        } else {
-          if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
-        }
-      }
-
-      updateTooltips();
-      updateDebugInfo();
-    }
-
     function toggleLayer(layer, zoomRange) {
       if (!layer) return;
       const zoom = map.getZoom();
-      if (inZoomRange(zoom, zoomRange)) {
+      if (zoom >= zoomRange[0] && zoom <= zoomRange[1]) {
         if (!map.hasLayer(layer)) map.addLayer(layer);
       } else {
         if (map.hasLayer(layer)) map.removeLayer(layer);
       }
-    }
-
-    function updateTooltips() {
-      const zoom = map.getZoom();
-      const bounds = map.getBounds();
-
-      plzFeatures.forEach(layer => {
-        const inRange = inZoomRange(zoom, ZOOM_RANGE[layer._plzKey] || [0, 0]);
-        const visibleInMap = bounds.intersects(layer.getBounds());
-
-        const showTooltip = inRange && visibleInMap;
-
-        if (showTooltip && !layer._tooltipAdded) {
-          layer.bindTooltip(layer._plz, {
-            permanent: true,
-            direction: 'center',
-            className: 'plz-label',
-            opacity: 1,
-          });
-          layer._tooltipAdded = true;
-        }
-        if (layer.getTooltip()) {
-          const el = layer.getTooltip().getElement();
-          if (el) el.style.display = showTooltip ? 'block' : 'none';
-        }
-      });
-    }
-
-    function applyMarkerFilter() {
-      if (!markerLayer) return;
-      const showUnknown = document.getElementById('unknownMarkerToggle').checked;
-
-      markerLayer.eachLayer(layer => {
-        const rawTyp = layer.feature.properties.Netzform || '';
-        const typ = rawTyp.trim().toUpperCase();
-
-        let visible = false;
-        let color = 'gray';
-        let opacity = 0.5;
-
-        if (typ === 'TT') {
-          color = 'red';
-          opacity = 1;
-          visible = true;
-        } else if (typ === 'TN') {
-          color = 'green';
-          opacity = 1;
-          visible = true;
-        } else if (typ === '' || typ == null) {
-          visible = showUnknown;
-        }
-
-        layer.setStyle({
-          color,
-          fillColor: color,
-          opacity: visible ? 1 : 0,
-          fillOpacity: visible ? opacity : 0
-        });
-      });
-    }
-
-    function zoomToPLZ() {
-      const input = document.getElementById('plzInput').value.trim();
-
-      plzFeatures.forEach(layer => {
-        layer.setStyle({ fillColor: 'transparent', fillOpacity: 0, color: '#000', weight: 1.5 });
-      });
-
-      const found = plzFeatures.find(l => l._plz === input);
-      if (found) {
-        map.fitBounds(found.getBounds(), { maxZoom: 12 });
-        found.openPopup();
-        found.setStyle({ fillColor: 'yellow', fillOpacity: 0.3, color: '#333', weight: 2 });
-        analyzeMarkersInPolygon(found);
-      } else {
-        alert('PLZ nicht gefunden oder noch nicht geladen.');
-        document.getElementById('marker-info').innerText = '';
-      }
-    }
-
-    function analyzeMarkersInPolygon(layer) {
-      if (!markerLayer) return;
-      const bounds = layer.getBounds();
-      let countAll = 0, countTT = 0, countTN = 0, countUnknown = 0;
-
-      markerLayer.eachLayer(marker => {
-        if (bounds.contains(marker.getLatLng())) {
-          countAll++;
-          const typ = (marker.feature.properties.Netzform || '').trim().toUpperCase();
-          if (typ === 'TT') countTT++;
-          else if (typ === 'TN') countTN++;
-          else countUnknown++;
-        }
-      });
-
-      const totalKnown = countTT + countTN;
-      const ratio = totalKnown > 0 ? ((countTT / totalKnown) * 100).toFixed(1) + '%' : 'n.v.';
-      document.getElementById('marker-info').innerText =
-        `Im PLZ-Bereich ${layer._plz} sind ${countAll} Marker // Davon ${countTT} TT, ${countTN} TN und ${countUnknown} Unbekannt. TT-Anteil: ${ratio}`;
     }
 
     function updateDebugInfo() {
@@ -285,10 +203,38 @@
         `Geladen: PLZ1=${plzCount.plz1}, PLZ2=${plzCount.plz2}, PLZ3=${plzCount.plz3}, PLZ5=${plzCount.plz5}, Marker=${markerCount}`;
     }
 
-    map.on('zoomend', updateLayers);
-    map.on('moveend', updateTooltips);
+    function refreshAirtableData() {
+      window.plzStatusCache = {};
+      loadAll();
+    }
 
-    document.getElementById('unknownMarkerToggle').addEventListener('change', applyMarkerFilter);
+    async function loadAll() {
+      window.plzStatusCache = {};
+      layerPLZ1 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-1stellig.geojson', '#999', 'plz1');
+      layerPLZ2 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-2stellig.geojson', '#666', 'plz2');
+      layerPLZ3 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-3stellig.geojson', '#444', 'plz3');
+      layerPLZ5 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', '#333', 'plz5');
+      await loadMarkers('https://christoph-staudacher.github.io/Netzkartendaten/Netzformen.geojson');
+      updateLayers();
+      updateDebugInfo();
+    }
+
+    function updateLayers() {
+      const zoom = map.getZoom();
+      toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
+      toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
+      toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
+      toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
+
+      if (markerLayer) {
+        const showTTTN = document.getElementById('tttnMarkerToggle').checked;
+        if (zoom >= ZOOM_RANGE.markers[0] && showTTTN) {
+          if (!map.hasLayer(markerLayer)) map.addLayer(markerLayer);
+        } else {
+          if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
+        }
+      }
+    }
 
     document.getElementById('plzInput').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
@@ -296,6 +242,12 @@
         zoomToPLZ();
       }
     });
+
+    document.getElementById('unknownMarkerToggle').addEventListener('change', updateLayers);
+    document.getElementById('tttnMarkerToggle').addEventListener('change', updateLayers);
+
+    map.on('zoomend', updateLayers);
+    map.on('moveend', updateDebugInfo);
 
     loadAll();
   </script>
