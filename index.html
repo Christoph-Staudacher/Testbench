@@ -89,12 +89,6 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script>
-    const map = L.map("map").setView([51.2, 10.5], 6);
-
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "&copy; OpenStreetMap-Mitwirkende",
-    }).addTo(map);
-
     const AIRTABLE_API_KEY =
       "patlyiYzU6HAMUiY9.7cfef1ea6fc2a5cd9cc3acebf1347fd04ba1e1d7dd60e9acc7bb77c0caa72f78";
     const AIRTABLE_BASE = "appGh6rEXtCNMCrWh";
@@ -108,15 +102,23 @@
       markers: [9, 20],
     };
 
-    let layerPLZ1,
-      layerPLZ2,
-      layerPLZ3,
-      layerPLZ5,
-      markerLayer = L.layerGroup();
+    const map = L.map("map").setView([51.2, 10.5], 6);
 
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap-Mitwirkende",
+    }).addTo(map);
+
+    // Layer Variablen
+    let layerPLZ1, layerPLZ2, layerPLZ3, layerPLZ5, markerLayer;
+
+    // PLZ und Marker Features
     const plzFeatures = [];
     const markerFeatures = [];
+
+    // Status Cache
     const plzStatusCache = {};
+
+    // Zähler für Debug
     const plzCount = { plz1: 0, plz2: 0, plz3: 0, plz5: 0 };
     let markerCount = 0;
 
@@ -196,34 +198,53 @@
     }
 
     async function savePLZStatus(plz, status) {
-      // Status in Airtable aktualisieren
-      const url = `https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE}`;
+      // Prüfe ob bereits vorhanden, update sonst create
+      let existingRecordId = null;
+      const urlQuery = `https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE}?filterByFormula={PLZ}='${plz}'`;
+      try {
+        const resQuery = await fetch(urlQuery, {
+          headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` },
+        });
+        if (resQuery.ok) {
+          const json = await resQuery.json();
+          if (json.records.length > 0) existingRecordId = json.records[0].id;
+        }
+      } catch (e) {
+        console.error("Fehler bei Query für savePLZStatus:", e);
+      }
+
+      const url = existingRecordId
+        ? `https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE}/${existingRecordId}`
+        : `https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE}`;
+
+      const method = existingRecordId ? "PATCH" : "POST";
       const body = JSON.stringify({
         fields: {
           PLZ: plz,
           status: status,
         },
       });
+
       const res = await fetch(url, {
-        method: "POST",
+        method,
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${AIRTABLE_API_KEY}`,
         },
         body,
       });
+
       if (!res.ok) {
         console.error("Fehler beim Speichern:", await res.text());
       } else {
         plzStatusCache[plz] = { status };
+        updatePLZFeaturesStatus(plz, status);
       }
-      // Status im UI updaten
-      updatePLZFeaturesStatus(plz, status);
     }
 
     function updatePLZFeaturesStatus(plz, status) {
       plzFeatures.forEach((layer) => {
-        // TT/TN gilt auch für PLZ-Bereiche, Misch nur exakt
+        // TT/TN gilt für PLZ-Bereiche, Misch nur exakt
         if (
           layer._plz === plz ||
           (status !== "Misch" &&
@@ -247,7 +268,7 @@
       updateMarkerVisibility();
     }
 
-    async function loadPLZLayer(url, key, color) {
+    async function loadPLZLayer(url, key) {
       const res = await fetch(url);
       const data = await res.json();
       plzCount[key] = data.features.length;
@@ -268,40 +289,39 @@
         },
         onEachFeature: async (feature, layer) => {
           const plz = feature.properties.plz;
-          if (!plzStatusCache[plz]) {
-            const data = await fetchPLZStatusWithRetry(plz);
-            if (data) plzStatusCache[plz] = data;
-            await sleep(250);
-          }
           layer._plz = plz;
           layer._plzKey = key;
           plzFeatures.push(layer);
 
+          // Tooltip, abhängig von Zoom
+          layer.bindTooltip(plz, {
+            permanent: false,
+            direction: "center",
+            className: "plz-label",
+          });
+
+          // Popup mit Statusbuttons
           const currentStatus = plzStatusCache[plz]?.status || "unbekannt";
           const popupContent = `<strong>PLZ:</strong> ${plz}<br>Status: ${currentStatus}<br>
             <button class='status-button' onclick="setPLZStatus('${plz}', 'TT')">TT</button>
             <button class='status-button' onclick="setPLZStatus('${plz}', 'TN')">TN</button>
             <button class='status-button' onclick="setPLZStatus('${plz}', 'Misch')">Misch</button>`;
           layer.bindPopup(popupContent);
-          layer.bindTooltip(plz, {
-            permanent: inZoomRange(map.getZoom(), ZOOM_RANGE[key]),
-            direction: "center",
-            className: "plz-label",
-          });
         },
       });
+
       return layer;
     }
 
     async function loadMarkers() {
-      // Dummy: Marker laden - hier kannst du den echten GeoJSON-Pfad einfügen
       const url =
         "https://christoph-staudacher.github.io/Netzkartendaten/Netzformen.geojson";
       const res = await fetch(url);
       const data = await res.json();
       markerCount = data.features.length;
 
-      markerLayer.clearLayers();
+      if (markerLayer) markerLayer.clearLayers();
+      else markerLayer = L.layerGroup();
 
       data.features.forEach((feature) => {
         const latlng = L.latLng(
@@ -437,12 +457,11 @@
       ).innerText = `Im PLZ-Bereich ${layer._plz} sind ${countAll} Marker // Davon ${countTT} TT, ${countTN} TN und ${countUnknown} Unbekannt. TT-Anteil: ${ratio}`;
     }
 
-    // --- NEU: Nur sichtbare PLZ aus Layer abfragen, mit Rate-Limit Handling ---
     async function fetchVisiblePLZStatuses(geojsonLayer, plzKey) {
       const zoom = map.getZoom();
       const bounds = map.getBounds();
 
-      // Filter Features, die im Sichtbereich sind und in Zoom-Bereich liegen
+      // Filter Features, die im Sichtbereich sind und im Zoombereich
       const visibleFeatures = geojsonLayer.getLayers().filter((layer) => {
         if (!inZoomRange(zoom, ZOOM_RANGE[plzKey])) return false;
         if (!bounds.intersects(layer.getBounds())) return false;
@@ -456,7 +475,6 @@
           const statusData = await fetchPLZStatusWithRetry(plz);
           if (statusData) {
             plzStatusCache[plz] = statusData;
-            // Update Style für den Layer
             const status = statusData.status || "unbekannt";
             layer.setStyle({
               fillColor:
@@ -482,37 +500,31 @@
 
       layerPLZ1 = await loadPLZLayer(
         "https://christoph-staudacher.github.io/Netzkartendaten/plz-1stellig.geojson",
-        "plz1",
-        "#999"
+        "plz1"
       );
       layerPLZ2 = await loadPLZLayer(
         "https://christoph-staudacher.github.io/Netzkartendaten/plz-2stellig.geojson",
-        "plz2",
-        "#666"
+        "plz2"
       );
       layerPLZ3 = await loadPLZLayer(
         "https://christoph-staudacher.github.io/Netzkartendaten/plz-3stellig.geojson",
-        "plz3",
-        "#444"
+        "plz3"
       );
       layerPLZ5 = await loadPLZLayer(
         "https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson",
-        "plz5",
-        "#333"
+        "plz5"
       );
 
-      markerLayer = L.layerGroup();
       await loadMarkers();
       markerLayer.addTo(map);
 
-      // Alle Polygone standardmäßig unsichtbar (sichtbar nur per zoom)
+      // Alle Polygone standardmäßig ausblenden (sichtbar nur per Zoom)
       [layerPLZ1, layerPLZ2, layerPLZ3, layerPLZ5].forEach((layer) => {
         if (map.hasLayer(layer)) map.removeLayer(layer);
       });
 
       updateDebugInfo();
 
-      // Bei Zoomwechsel Layer togglen und Status neu laden für sichtbare PLZ
       map.on("zoomend moveend", async () => {
         toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
         toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
@@ -520,10 +532,8 @@
         toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
         toggleLayer(markerLayer, ZOOM_RANGE.markers);
 
-        // Tooltips nach Sichtbarkeit anzeigen
         updateTooltips();
 
-        // Status nur für sichtbare Polygone laden
         await fetchVisiblePLZStatuses(layerPLZ1, "plz1");
         await fetchVisiblePLZStatuses(layerPLZ2, "plz2");
         await fetchVisiblePLZStatuses(layerPLZ3, "plz3");
@@ -540,22 +550,18 @@
       setLoading(false);
     }
 
-    // Event-Listener für Checkboxen
-    document
-      .getElementById("unknownMarkerToggle")
-      .addEventListener("change", updateMarkerVisibility);
-    document
-      .getElementById("tttnMarkerToggle")
-      .addEventListener("change", updateMarkerVisibility);
+    // Event Listener für Checkboxen
+    document.getElementById("unknownMarkerToggle").addEventListener("change", updateMarkerVisibility);
+    document.getElementById("tttnMarkerToggle").addEventListener("change", updateMarkerVisibility);
 
-    // Globale Funktion für Popups
+    // Globale Funktion für Popups zum Status setzen
     window.setPLZStatus = async function (plz, status) {
       setLoading(true);
       await savePLZStatus(plz, status);
       setLoading(false);
     };
 
-    // Suche und Zoom Funktion global
+    // Globale Suche und Zoom Funktion
     window.zoomToPLZ = zoomToPLZ;
 
     // Karte laden
