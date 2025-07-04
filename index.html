@@ -437,113 +437,116 @@
       setLoading(false);
       updatePLZFeaturesStatus(plz, status);
 
-      // Unter-PLZ (z.B. 99 → 990-999) nachladen und speichern
+      // Unter-PLZ (z.B. 8 → 80–89, 800–899, 80000–89999) nachladen und speichern
       await saveSubPLZ(plz, status);
     }
 
-    // Hilfsfunktion zum Erzeugen und Speichern der untergeordneten PLZ
+    // Angepasste Funktion zum Erzeugen und Speichern der untergeordneten PLZ bis 5-stellig
     async function saveSubPLZ(plz, status) {
       if (!loadingActive) return;
 
-      const subPLZs = new Set();
+      const queue = [plz];
+      const visited = new Set();
 
-      if (plz.length === 1) {
-        for (let i = 0; i <= 9; i++) {
-          subPLZs.add(plz + i);
+      while (queue.length > 0) {
+        const currentPLZ = queue.shift();
+        if (visited.has(currentPLZ)) continue;
+        visited.add(currentPLZ);
+
+        // Status setzen (wenn nicht schon gesetzt)
+        if (!plzStatusCache[currentPLZ]) {
+          if (plzExistsInLayers(currentPLZ)) {
+            await saveOrUpdatePLZStatus(currentPLZ, status);
+            await sleep(250);
+          }
         }
-      } else if (plz.length === 2) {
-        for (let i = 0; i <= 9; i++) {
-          subPLZs.add(plz + i);
+
+        // Je nach Länge weitere Unter-PLZ generieren
+        if (currentPLZ.length === 1) {
+          // Von 1-stellig zu 2-stellig alle 10 Möglichkeiten (z.B. 8 → 80-89)
+          for (let i = 0; i <= 9; i++) {
+            const nextPLZ = currentPLZ + i;
+            if (!visited.has(nextPLZ)) queue.push(nextPLZ);
+          }
+        } else if (currentPLZ.length === 2) {
+          // Von 2-stellig zu 3-stellig alle 10 Möglichkeiten (z.B. 83 → 830-839)
+          for (let i = 0; i <= 9; i++) {
+            const nextPLZ = currentPLZ + i;
+            if (!visited.has(nextPLZ)) queue.push(nextPLZ);
+          }
+        } else if (currentPLZ.length === 3) {
+          // Von 3-stellig zu 5-stellig alle 100 Möglichkeiten (z.B. 830 → 83000-83099)
+          for (let i = 0; i <= 99; i++) {
+            const suffix = i.toString().padStart(2, "0");
+            const nextPLZ = currentPLZ + suffix;
+            if (!visited.has(nextPLZ)) queue.push(nextPLZ);
+          }
         }
-      } else if (plz.length === 3) {
-        for (let i = 0; i <= 9; i++) {
-          subPLZs.add(plz + i);
-        }
-      } else {
-        // Keine Unter-PLZ für 5-stellige oder andere Längen
-        return;
-      }
-
-      for (const candidate of subPLZs) {
-        if (plzStatusCache[candidate]) continue;
-        if (!loadingActive) return;
-
-        if (!plzExistsInLayers(candidate)) continue;
-
-        await saveOrUpdatePLZStatus(candidate, status);
-        await sleep(250);
+        // Für 5-stellige keine Unter-PLZ weiter
       }
     }
 
-    // Prüfen ob PLZ in den geladenen Polygon-Layern existiert
+    // Prüfen, ob PLZ im Layer geladen ist (um unnötige Anfragen zu vermeiden)
     function plzExistsInLayers(plz) {
       return plzFeatures.some((layer) => layer._plz === plz);
     }
 
-    // Initialisierung der Karte und Daten
-    async function init() {
-      setLoading(true, "Lade PLZ 1-stellig...");
+    // Initialisierung: Lade alle GeoJSON Daten und Marker
+    async function initialize() {
+      setLoading(true, "Lade 1-stellige PLZ...");
       layerPLZ1 = await loadPLZLayer(URLS.plz1, "plz1");
-      setLoading(true, "Lade PLZ 2-stellig...");
+      setLoading(true, "Lade 2-stellige PLZ...");
       layerPLZ2 = await loadPLZLayer(URLS.plz2, "plz2");
-      setLoading(true, "Lade PLZ 3-stellig...");
+      setLoading(true, "Lade 3-stellige PLZ...");
       layerPLZ3 = await loadPLZLayer(URLS.plz3, "plz3");
-      setLoading(true, "Lade PLZ 5-stellig...");
+      setLoading(true, "Lade 5-stellige PLZ...");
       layerPLZ5 = await loadPLZLayer(URLS.plz5, "plz5");
 
       setLoading(true, "Lade Marker...");
       await loadMarkers();
 
-      // Layer und Marker initial zur Karte hinzufügen, damit toggleLayer zuverlässig arbeitet
-      layerPLZ1.addTo(map);
-      layerPLZ2.addTo(map);
-      layerPLZ3.addTo(map);
-      layerPLZ5.addTo(map);
-      markerLayer.addTo(map);
-
-      // Zoomend-Event manuell triggern, damit alle Sichtbarkeiten korrekt initialisiert werden
-      map.fire("zoomend");
+      map.addLayer(markerLayer);
 
       attachStatusPopup();
 
       setLoading(false);
       updateDebugInfo();
+
+      toggleAllLayers();
+
+      map.on("zoomend moveend", () => {
+        toggleAllLayers();
+        updateMarkerVisibility();
+        updateTooltips();
+      });
+
+      document.getElementById("unknownMarkerToggle").addEventListener("change", updateMarkerVisibility);
+      document.getElementById("tttnMarkerToggle").addEventListener("change", updateMarkerVisibility);
+
+      btnStop.onclick = () => {
+        loadingActive = false;
+        setLoading(false);
+        btnStop.disabled = true;
+        btnRestart.disabled = false;
+      };
+      btnRestart.onclick = async () => {
+        if (!loadingActive) {
+          loadingActive = true;
+          btnStop.disabled = false;
+          btnRestart.disabled = true;
+          await initialize();
+        }
+      };
     }
 
-    // Event-Listener für Zoom-Ende
-    map.on("zoomend", () => {
+    function toggleAllLayers() {
       toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
       toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
       toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
       toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
-      updateMarkerVisibility();
-      updateTooltips();
-    });
+    }
 
-    // Event-Listener für Checkboxen
-    document.getElementById("unknownMarkerToggle").addEventListener("change", () => {
-      updateMarkerVisibility();
-    });
-    document.getElementById("tttnMarkerToggle").addEventListener("change", () => {
-      updateMarkerVisibility();
-    });
-
-    // Steuerung Buttons laden stoppen/neuladen
-    btnStop.addEventListener("click", () => {
-      loadingActive = false;
-      setLoading(false);
-      btnStop.disabled = true;
-      btnRestart.disabled = false;
-      loadingText.textContent = "Laden gestoppt.";
-    });
-    btnRestart.addEventListener("click", () => {
-      loadingActive = true;
-      btnStop.disabled = false;
-      btnRestart.disabled = true;
-      init();
-    });
-
-    init();
+    initialize();
   </script>
 </body>
 </html>
