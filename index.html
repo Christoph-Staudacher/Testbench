@@ -2,24 +2,12 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8" />
-  <title>PLZ-Karte mit Airtable Status & Rate Limit Handling</title>
+  <title>PLZ-Karte mit Airtable Status & Lazy Load</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    crossorigin=""
-  />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <style>
-    html,
-    body {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-    }
-    #map {
-      width: 100%;
-      height: 90vh;
-    }
+    html, body { margin: 0; padding: 0; height: 100%; }
+    #map { width: 100%; height: 90vh; }
     #plz-search {
       padding: 10px;
       background: #f8f8f8;
@@ -29,59 +17,23 @@
       gap: 10px;
       align-items: center;
     }
-    .plz-label {
-      font-size: 12px;
-      font-weight: bold;
-      background: transparent;
-      padding: 0;
-      border: none;
-      color: #333;
-    }
-    #marker-info,
-    #debug-info {
-      font-size: 12px;
-      color: #555;
-    }
+    .plz-label { font-size: 12px; font-weight: bold; color: #333; background: transparent; }
+    #marker-info, #debug-info { font-size: 12px; color: #555; }
     .status-button {
-      margin: 2px;
-      padding: 3px 5px;
-      font-size: 11px;
-      cursor: pointer;
-      border: 1px solid #999;
-      background: #eee;
+      margin: 2px; padding: 3px 5px;
+      font-size: 11px; cursor: pointer;
+      border: 1px solid #999; background: #eee;
     }
-    /* Ladekreis */
     #loading-spinner {
-      width: 14px;
-      height: 14px;
+      width: 14px; height: 14px;
       border: 2px solid #999;
       border-top: 2px solid transparent;
       border-radius: 50%;
       animation: spin 1s linear infinite;
-      margin-left: 8px;
-      display: none;
+      margin-left: 8px; display: none;
     }
-    @keyframes spin {
-      to {
-        transform: rotate(360deg);
-      }
-    }
-    #loading-text {
-      margin-left: 6px;
-      font-size: 12px;
-      color: #555;
-      user-select: none;
-    }
-    #control-buttons {
-      margin-left: auto;
-      display: flex;
-      gap: 8px;
-    }
-    button.control-btn {
-      font-size: 12px;
-      padding: 4px 8px;
-      cursor: pointer;
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loading-status-text { margin-left: 10px; font-style: italic; color: #999; min-width: 150px; }
   </style>
 </head>
 <body>
@@ -89,41 +41,21 @@
     <label for="plzInput">PLZ eingeben:</label>
     <input type="text" id="plzInput" placeholder="z.B. 83052" />
     <button onclick="zoomToPLZ()">Suchen</button>
-
     <label><input type="checkbox" id="unknownMarkerToggle" /> Unbekannte Marker anzeigen</label>
     <label><input type="checkbox" id="tttnMarkerToggle" checked /> Marker in TT/TN-PLZ anzeigen</label>
-
     <div id="marker-info"></div>
-
     <div id="debug-info">
-      Daten geladen:
-      <span id="debug-text">–</span>
+      Daten geladen: <span id="debug-text">–</span>
       <div id="loading-spinner"></div>
-      <span id="loading-text"></span>
-      <div id="control-buttons">
-        <button class="control-btn" id="btn-stop">Laden stoppen</button>
-        <button class="control-btn" id="btn-restart" disabled>Neu laden</button>
-      </div>
+      <span id="loading-status-text"></span>
     </div>
   </div>
-
   <div id="map"></div>
-
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script>
-    // Airtable Konfiguration
     const AIRTABLE_API_KEY = "patlyiYzU6HAMUiY9.7cfef1ea6fc2a5cd9cc3acebf1347fd04ba1e1d7dd60e9acc7bb77c0caa72f78";
     const AIRTABLE_BASE = "appGh6rEXtCNMCrWh";
-    const AIRTABLE_TABLE = "PLZ%20Status";
-
-    // GeoJSON URLs
-    const URLS = {
-      plz1: "https://christoph-staudacher.github.io/Netzkartendaten/plz-1stellig.geojson",
-      plz2: "https://christoph-staudacher.github.io/Netzkartendaten/plz-2stellig.geojson",
-      plz3: "https://christoph-staudacher.github.io/Netzkartendaten/plz-3stellig.geojson",
-      plz5: "https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson",
-      marker: "https://christoph-staudacher.github.io/Netzkartendaten/Netzformen.geojson",
-    };
+    const AIRTABLE_TABLE = "PLZ Status";
 
     const ZOOM_RANGE = {
       plz1: [6, 6],
@@ -133,45 +65,44 @@
       markers: [9, 20],
     };
 
-    const map = L.map("map").setView([51.2, 10.5], 6);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "&copy; OpenStreetMap-Mitwirkende",
-    }).addTo(map);
-
     let layerPLZ1, layerPLZ2, layerPLZ3, layerPLZ5;
     let markerLayer = L.layerGroup();
 
     const plzFeatures = [];
     const markerFeatures = [];
     const plzStatusCache = {};
+    const plzRecordIdCache = {}; // Map PLZ -> Airtable record ID (for updates)
     const plzCount = { plz1: 0, plz2: 0, plz3: 0, plz5: 0 };
     let markerCount = 0;
 
-    // Steuerung Ladeprozess
-    let loadingActive = true;
-    let currentLoadingTask = null;
-
-    // UI-Elemente
     const debugText = document.getElementById("debug-text");
     const loadingSpinner = document.getElementById("loading-spinner");
-    const loadingText = document.getElementById("loading-text");
-    const btnStop = document.getElementById("btn-stop");
-    const btnRestart = document.getElementById("btn-restart");
+    const loadingStatusText = document.getElementById("loading-status-text");
+    const markerInfo = document.getElementById("marker-info");
 
-    // Hilfsfunktionen
-    function sleep(ms) {
-      return new Promise((resolve) => setTimeout(resolve, ms));
-    }
+    const map = L.map("map").setView([51.2, 10.5], 6);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap-Mitwirkende",
+    }).addTo(map);
+
     function inZoomRange(zoom, range) {
       return zoom >= range[0] && zoom <= range[1];
     }
-    function setLoading(isLoading, message = "") {
-      loadingSpinner.style.display = isLoading ? "inline-block" : "none";
-      loadingText.textContent = isLoading ? message : "";
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
     }
+
+    function setLoading(isLoading, text = "") {
+      loadingSpinner.style.display = isLoading ? "inline-block" : "none";
+      loadingStatusText.textContent = isLoading ? text : "";
+    }
+
     function updateDebugInfo() {
       debugText.textContent = `PLZ1=${plzCount.plz1}, PLZ2=${plzCount.plz2}, PLZ3=${plzCount.plz3}, PLZ5=${plzCount.plz5}, Marker=${markerCount}`;
     }
+
     function toggleLayer(layer, range) {
       if (!layer) return;
       const zoom = map.getZoom();
@@ -182,146 +113,140 @@
       }
     }
 
-    // Airtable API Abfrage mit Retry bei Rate Limit
-    async function fetchPLZStatusWithRetry(plz, maxRetries = 5) {
-      let tries = 0;
-      while (tries < maxRetries && loadingActive) {
-        tries++;
-        const url = `https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE}?filterByFormula={PLZ}='${plz}'`;
-        try {
-          const res = await fetch(url, {
-            headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` },
-          });
-          if (res.status === 429) {
-            // Rate Limit getroffen, warte 1 Sekunde
-            await sleep(1000);
-            continue;
-          }
-          if (!res.ok) {
-            console.error(`Fehler bei PLZ ${plz}:`, await res.text());
-            return null;
-          }
-          const json = await res.json();
-          return json.records[0] ? {...json.records[0].fields, recordId: json.records[0].id} : null;
-        } catch (e) {
-          console.error("Fetch Fehler:", e);
+    function updateMarkerVisibility() {
+      if (!markerLayer) return;
+      const showUnknown = document.getElementById("unknownMarkerToggle").checked;
+      const showTTTN = document.getElementById("tttnMarkerToggle").checked;
+
+      markerLayer.eachLayer(marker => {
+        const typ = (marker.options.netzform || "").trim().toUpperCase();
+        let visible = false;
+        if (typ === "TT" || typ === "TN") visible = showTTTN;
+        else if (!typ) visible = showUnknown;
+
+        marker.setStyle({
+          opacity: visible ? 1 : 0,
+          fillOpacity: visible ? 1 : 0,
+        });
+      });
+    }
+
+    async function fetchPLZStatus(plz) {
+      const url = `https://api.airtable.com/v0/${AIRTABLE_BASE}/${encodeURIComponent(AIRTABLE_TABLE)}?filterByFormula={PLZ}='${plz}'`;
+      for (let tries = 0; tries < 5; tries++) {
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` } });
+        if (res.status === 429) {
+          await sleep(1000);
+          continue;
+        }
+        if (!res.ok) {
+          console.error("Fehler bei fetchPLZStatus:", await res.text());
           return null;
         }
+        const json = await res.json();
+        if (json.records.length === 0) return null;
+        const record = json.records[0];
+        plzRecordIdCache[plz] = record.id;
+        return record.fields;
       }
-      if (!loadingActive) return null;
       console.error(`Max retries erreicht für PLZ ${plz}`);
       return null;
     }
 
-    // Speichern/Aktualisieren in Airtable mit Prüfung auf existierenden Datensatz
-    async function saveOrUpdatePLZStatus(plz, status) {
-      if (!loadingActive) return;
-      setLoading(true, `Speichere Status für PLZ ${plz}...`);
+    async function createPLZRecord(plz, status) {
+      const url = `https://api.airtable.com/v0/${AIRTABLE_BASE}/${encodeURIComponent(AIRTABLE_TABLE)}`;
+      const body = JSON.stringify({ fields: { PLZ: plz, status } });
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${AIRTABLE_API_KEY}` },
+        body
+      });
+      if (!res.ok) {
+        console.error("Fehler beim Erstellen:", await res.text());
+        return null;
+      }
+      const json = await res.json();
+      plzRecordIdCache[plz] = json.id;
+      return json.fields;
+    }
 
-      // Prüfen ob Datensatz existiert
-      const existing = await fetchPLZStatusWithRetry(plz);
-      if (!loadingActive) return;
+    async function updatePLZRecord(plz, status) {
+      if (!plzRecordIdCache[plz]) return await createPLZRecord(plz, status);
+      const url = `https://api.airtable.com/v0/${AIRTABLE_BASE}/${encodeURIComponent(AIRTABLE_TABLE)}/${plzRecordIdCache[plz]}`;
+      const body = JSON.stringify({ fields: { status } });
+      const res = await fetch(url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${AIRTABLE_API_KEY}` },
+        body
+      });
+      if (!res.ok) {
+        console.error("Fehler beim Update:", await res.text());
+        return null;
+      }
+      return await res.json();
+    }
 
-      const fields = { PLZ: plz, status };
+    async function setPLZStatus(plz, status) {
+      setLoading(true, `Speichere Status für ${plz}...`);
+      // Update oder create selbst
+      const updated = await updatePLZRecord(plz, status);
+      if (updated) {
+        plzStatusCache[plz] = { status };
+        updatePLZFeaturesStatus(plz, status);
+        // Auch für untergeordnete PLZ anlegen/aktualisieren (z.B. 99 => 990-999, 99000-99999)
+        await createOrUpdateSubPLZ(plz, status);
+      }
+      setLoading(false);
+    }
 
-      if (existing && existing.recordId) {
-        // Update via PATCH
-        const urlPatch = `https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE}/${existing.recordId}`;
-        const res = await fetch(urlPatch, {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-          },
-          body: JSON.stringify({ fields }),
-        });
-        if (!res.ok) {
-          console.error(`Update Fehler PLZ ${plz}:`, await res.text());
-        } else {
-          plzStatusCache[plz] = { status };
-        }
-      } else {
-        // Neu anlegen via POST
-        const urlPost = `https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE}`;
-        const res = await fetch(urlPost, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-          },
-          body: JSON.stringify({ fields }),
-        });
-        if (!res.ok) {
-          console.error(`Erstellung Fehler PLZ ${plz}:`, await res.text());
-        } else {
-          plzStatusCache[plz] = { status };
+    async function createOrUpdateSubPLZ(plz, status) {
+      if (!/^\d+$/.test(plz)) return;
+      const len = plz.length;
+      // Nur bei 1 oder 2 oder 3 Stellen sinnvoll, sonst überspringen
+      if (len > 3) return;
+
+      const lowerBound3 = plz.padEnd(3, '0'); // z.B. "99" -> "990"
+      const upperBound3 = plz.padEnd(3, '9'); // "99" -> "999"
+      const lowerBound5 = plz.padEnd(5, '0'); // "99" -> "99000"
+      const upperBound5 = plz.padEnd(5, '9'); // "99" -> "99999"
+
+      setLoading(true, `Erstelle/Aktualisiere Sub-PLZ zu ${plz}...`);
+
+      // Prüfe 3-stellige PLZ
+      for (let i = parseInt(lowerBound3,10); i <= parseInt(upperBound3,10); i++) {
+        const subPLZ = i.toString().padStart(3, '0');
+        if (subPLZ === plz) continue; // überspringe exakte PLZ
+        await upsertPLZIfExists(subPLZ, status);
+        await sleep(250);
+      }
+
+      // Prüfe 5-stellige PLZ
+      for (let i = parseInt(lowerBound5,10); i <= parseInt(upperBound5,10); i++) {
+        const subPLZ = i.toString().padStart(5, '0');
+        if (subPLZ.startsWith(plz)) {
+          await upsertPLZIfExists(subPLZ, status);
+          await sleep(250);
         }
       }
       setLoading(false);
-      // Status in Karte updaten
-      updatePLZFeaturesStatus(plz, status);
-
-      // Zusätzliche untergeordnete PLZ erzeugen und speichern
-      await saveSubPLZ(plz, status);
     }
 
-    // Hilfsfunktion zum Erzeugen und Speichern der untergeordneten PLZ
-    async function saveSubPLZ(plz, status) {
-      if (!loadingActive) return;
-
-      // Nur wenn PLZ 2 oder 3 Stellen hat, entsprechende Bereiche erweitern
-      let plzNum = parseInt(plz);
-      if (isNaN(plzNum)) return;
-
-      const subPLZs = new Set();
-
-      if (plz.length === 2) {
-        // z.B. 99 -> 990..999
-        for (let i = 0; i <= 9; i++) {
-          const candidate = `${plz}${i}`;
-          subPLZs.add(candidate);
-        }
-      } else if (plz.length === 3) {
-        // z.B. 673 -> 6730..6739
-        for (let i = 0; i <= 9; i++) {
-          const candidate = `${plz}${i}`;
-          subPLZs.add(candidate);
-        }
-      } else if (plz.length === 1) {
-        // z.B. 6 -> 60..69
-        for (let i = 0; i <= 9; i++) {
-          const candidate = `${plz}${i}`;
-          subPLZs.add(candidate);
-        }
+    // Prüft via Airtable ob PLZ existiert und erstellt/updated
+    async function upsertPLZIfExists(plz, status) {
+      const existing = await fetchPLZStatus(plz);
+      if (existing) {
+        if (existing.status !== status) await updatePLZRecord(plz, status);
+        plzStatusCache[plz] = { status };
       }
-
-      for (const candidate of subPLZs) {
-        if (plzStatusCache[candidate]) continue; // schon bekannt
-        if (!loadingActive) return;
-
-        // Prüfen ob PLZ existiert in Layer, sonst überspringen
-        if (!plzExistsInLayers(candidate)) continue;
-
-        // Speichern mit gleichem Status
-        await saveOrUpdatePLZStatus(candidate, status);
-        await sleep(250); // Zwischen den Anfragen Pause
-      }
+      // Falls nicht existent, NICHT automatisch erstellen (du hattest gewünscht, nur bei Haupt-PLZ erstellen)
     }
 
-    // Prüfen ob PLZ in einem der geladenen Polygon-Layer existiert
-    function plzExistsInLayers(plz) {
-      return plzFeatures.some(layer => layer._plz === plz);
-    }
-
-    // Update Style und Cache wenn Status geändert
     function updatePLZFeaturesStatus(plz, status) {
-      plzFeatures.forEach((layer) => {
-        // TT/TN gilt auch für PLZ-Bereiche, Misch nur exakt
-        if (
-          layer._plz === plz ||
+      plzFeatures.forEach(layer => {
+        if (layer._plz === plz ||
           (status !== "Misch" &&
-            plz.length < layer._plz.length &&
-            layer._plz.startsWith(plz))
+          plz.length < layer._plz.length &&
+          layer._plz.startsWith(plz))
         ) {
           plzStatusCache[layer._plz] = { status };
           layer.setStyle({
@@ -334,20 +259,21 @@
                 ? "rgba(255,165,0,0.5)"
                 : "transparent",
             fillOpacity: 0.5,
+            color: "#000",
+            weight: 1.5
           });
         }
       });
       updateMarkerVisibility();
     }
 
-    // Lade PLZ Layer
     async function loadPLZLayer(url, key) {
       const res = await fetch(url);
       const data = await res.json();
       plzCount[key] = data.features.length;
 
       const layer = L.geoJSON(data, {
-        style: (feature) => {
+        style: feature => {
           const plz = feature.properties.plz || "";
           const status = plzStatusCache[plz]?.status || "unbekannt";
           const fillColor =
@@ -360,29 +286,43 @@
               : "transparent";
           return { color: "#000", weight: 1.5, fillColor, fillOpacity: 0.5 };
         },
-        onEachFeature: async (feature, layer) => {
+        onEachFeature: (feature, layer) => {
           const plz = feature.properties.plz;
           layer._plz = plz;
           layer._plzKey = key;
           plzFeatures.push(layer);
-        },
+
+          const currentStatus = plzStatusCache[plz]?.status || "unbekannt";
+
+          layer.bindPopup(
+            `<strong>PLZ:</strong> ${plz}<br>Status: ${currentStatus}<br>` +
+            `<button class='status-button' onclick="setPLZStatus('${plz}', 'TT')">TT</button>` +
+            `<button class='status-button' onclick="setPLZStatus('${plz}', 'TN')">TN</button>` +
+            `<button class='status-button' onclick="setPLZStatus('${plz}', 'Misch')">Misch</button>`
+          );
+
+          layer.bindTooltip(plz, {
+            permanent: false,
+            direction: "center",
+            className: "plz-label",
+          });
+        }
       });
+
       return layer;
     }
 
-    // Lade Marker
     async function loadMarkers() {
-      const res = await fetch(URLS.marker);
+      const url = "https://christoph-staudacher.github.io/Netzkartendaten/Netzformen.geojson";
+      const res = await fetch(url);
       const data = await res.json();
       markerCount = data.features.length;
 
       markerLayer.clearLayers();
+      markerFeatures.length = 0;
 
-      data.features.forEach((feature) => {
-        const latlng = L.latLng(
-          feature.geometry.coordinates[1],
-          feature.geometry.coordinates[0]
-        );
+      data.features.forEach(feature => {
+        const latlng = L.latLng(feature.geometry.coordinates[1], feature.geometry.coordinates[0]);
         const typ = (feature.properties.Netzform || "").trim().toUpperCase();
 
         let color = "gray";
@@ -401,188 +341,157 @@
           fillColor: color,
           fillOpacity: opacity,
           weight: 1,
+          netzform: typ
         }).bindPopup(`<strong>Netzform:</strong> ${typ || "Unbekannt"}`);
-
-        // Speichere Netzform für Filterung
-        marker.feature = feature;
 
         markerLayer.addLayer(marker);
         markerFeatures.push(marker);
       });
     }
 
-    // Zeige oder verstecke Marker abhängig von Checkboxen und Netzform
-    function updateMarkerVisibility() {
-      if (!markerLayer) return;
-      const showUnknown = document.getElementById("unknownMarkerToggle").checked;
-      const showTTTN = document.getElementById("tttnMarkerToggle").checked;
-
-      markerLayer.eachLayer((marker) => {
-        const typ = (marker.feature.properties.Netzform || "").trim().toUpperCase();
-
-        let visible = false;
-        if (typ === "TT" || typ === "TN") visible = showTTTN;
-        else if (!typ) visible = showUnknown;
-
-        marker.setStyle({
-          opacity: visible ? 1 : 0,
-          fillOpacity: visible ? 1 : 0,
-        });
-      });
-    }
-
-    // Tooltips an/aus je nach Zoom & Sichtbarkeit
     function updateTooltips() {
       const zoom = map.getZoom();
       const bounds = map.getBounds();
 
-      plzFeatures.forEach((layer) => {
-        const inRange = inZoomRange(zoom, ZOOM_RANGE[layer._plzKey] || [0, 0]);
+      plzFeatures.forEach(layer => {
+        const inRange = inZoomRange(zoom, ZOOM_RANGE[layer._plzKey] || [0,0]);
         const visibleInMap = bounds.intersects(layer.getBounds());
-        const showTooltip = inRange && visibleInMap;
-
-        if (showTooltip && !layer._tooltipAdded) {
-          layer.bindTooltip(layer._plz, {
-            permanent: true,
-            direction: "center",
-            className: "plz-label",
-            opacity: 1,
-          });
-          layer._tooltipAdded = true;
-        }
         if (layer.getTooltip()) {
           const el = layer.getTooltip().getElement();
-          if (el) el.style.display = showTooltip ? "block" : "none";
+          if (el) el.style.display = (inRange && visibleInMap) ? "block" : "none";
         }
       });
     }
 
-    // Zoom und Highlight für Such-PLZ
+    async function fetchVisiblePLZStatuses(geojsonLayer, plzKey) {
+      if (!geojsonLayer) return;
+      const zoom = map.getZoom();
+      if (!inZoomRange(zoom, ZOOM_RANGE[plzKey])) return;
+
+      const bounds = map.getBounds();
+      const visibleLayers = geojsonLayer.getLayers().filter(layer => bounds.intersects(layer.getBounds()));
+
+      for (const layer of visibleLayers) {
+        const plz = layer._plz;
+        if (!plzStatusCache[plz]) {
+          setLoading(true, `Lade Status für PLZ ${plz}...`);
+          const statusData = await fetchPLZStatus(plz);
+          if (statusData) {
+            plzStatusCache[plz] = statusData;
+            const status = statusData.status || "unbekannt";
+            layer.setStyle({
+              fillColor:
+                status === "TT"
+                  ? "rgba(255,0,0,0.5)"
+                  : status === "TN"
+                  ? "rgba(0,255,0,0.5)"
+                  : status === "Misch"
+                  ? "rgba(255,165,0,0.5)"
+                  : "transparent",
+              fillOpacity: 0.5,
+              color: "#000",
+              weight: 1.5
+            });
+          }
+          updateDebugInfo();
+          await sleep(250);
+        }
+      }
+      setLoading(false);
+    }
+
     function zoomToPLZ() {
       const input = document.getElementById("plzInput").value.trim();
+      if (!input) return alert("Bitte eine PLZ eingeben.");
 
-      plzFeatures.forEach((layer) => {
-        layer.setStyle({ fillColor: "transparent", fillOpacity: 0, color: "#000", weight: 1.5 });
-      });
+      plzFeatures.forEach(layer => layer.setStyle({
+        fillColor: "transparent",
+        fillOpacity: 0,
+        color: "#000",
+        weight: 1.5
+      }));
 
-      const found = plzFeatures.find((l) => l._plz === input);
-
+      const found = plzFeatures.find(l => l._plz === input);
       if (found) {
         map.fitBounds(found.getBounds(), { maxZoom: 12 });
         found.openPopup();
-        found.setStyle({ fillColor: "yellow", fillOpacity: 0.7, color: "#444", weight: 3 });
+        found.setStyle({ fillColor: "yellow", fillOpacity: 0.3, color: "#333", weight: 2 });
+        analyzeMarkersInPolygon(found);
       } else {
-        alert("PLZ nicht gefunden.");
+        alert("PLZ nicht gefunden oder noch nicht geladen.");
+        markerInfo.textContent = "";
       }
     }
 
-    // Popup mit Netzform-Auswahl bei Klick auf Polygon
-    function attachStatusPopup() {
-      plzFeatures.forEach((layer) => {
-        layer.on("click", async () => {
-          const plz = layer._plz;
-          const currentStatus = plzStatusCache[plz]?.status || "unbekannt";
+    function analyzeMarkersInPolygon(layer) {
+      if (!markerLayer) return;
+      const bounds = layer.getBounds();
+      let countTT = 0, countTN = 0, countUnknown = 0;
 
-          const popupContent = `
-            <div>
-              <strong>PLZ ${plz}</strong><br/>
-              Status:
-              <button class="status-button" data-status="TT">TT</button>
-              <button class="status-button" data-status="TN">TN</button>
-              <button class="status-button" data-status="Misch">Misch</button>
-              <button class="status-button" data-status="unbekannt">Unbekannt</button>
-            </div>
-          `;
-
-          layer.bindPopup(popupContent).openPopup();
-
-          // Warten auf DOM Update
-          await sleep(100);
-          const buttons = layer.getPopup().getElement().querySelectorAll("button.status-button");
-          buttons.forEach((btn) => {
-            btn.addEventListener("click", async () => {
-              const selectedStatus = btn.dataset.status;
-              await saveOrUpdatePLZStatus(plz, selectedStatus);
-              layer.closePopup();
-            });
-          });
-        });
+      markerLayer.eachLayer(marker => {
+        if (bounds.contains(marker.getLatLng())) {
+          const typ = (marker.options.netzform || "").trim().toUpperCase();
+          if (typ === "TT") countTT++;
+          else if (typ === "TN") countTN++;
+          else countUnknown++;
+        }
       });
+
+      markerInfo.textContent = `Marker in PLZ: TT=${countTT}, TN=${countTN}, Unbekannt=${countUnknown}`;
     }
 
-    // Hauptladefunktion
-    async function loadAllData() {
-      loadingActive = true;
+    // Eventhandler für Checkboxes
+    document.getElementById("unknownMarkerToggle").addEventListener("change", () => updateMarkerVisibility());
+    document.getElementById("tttnMarkerToggle").addEventListener("change", () => updateMarkerVisibility());
+
+    // Lade alle PLZ-Layer und Marker, dann initiale Darstellung
+    async function init() {
       setLoading(true, "Lade PLZ 1-stellig...");
-      layerPLZ1 = await loadPLZLayer(URLS.plz1, "plz1");
-      updateDebugInfo();
-
+      layerPLZ1 = await loadPLZLayer("https://christoph-staudacher.github.io/Netzkartendaten/Plz1.geojson", "plz1");
       setLoading(true, "Lade PLZ 2-stellig...");
-      layerPLZ2 = await loadPLZLayer(URLS.plz2, "plz2");
-      updateDebugInfo();
-
+      layerPLZ2 = await loadPLZLayer("https://christoph-staudacher.github.io/Netzkartendaten/Plz2.geojson", "plz2");
       setLoading(true, "Lade PLZ 3-stellig...");
-      layerPLZ3 = await loadPLZLayer(URLS.plz3, "plz3");
-      updateDebugInfo();
-
+      layerPLZ3 = await loadPLZLayer("https://christoph-staudacher.github.io/Netzkartendaten/Plz3.geojson", "plz3");
       setLoading(true, "Lade PLZ 5-stellig...");
-      layerPLZ5 = await loadPLZLayer(URLS.plz5, "plz5");
-      updateDebugInfo();
-
-      // Layer hinzufügen (initial abhängig von Zoom)
-      toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
-      toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
-      toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
-      toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
+      layerPLZ5 = await loadPLZLayer("https://christoph-staudacher.github.io/Netzkartendaten/Plz5.geojson", "plz5");
 
       setLoading(true, "Lade Marker...");
       await loadMarkers();
-      markerLayer.addTo(map);
-      updateMarkerVisibility();
 
-      setLoading(false);
-      updateDebugInfo();
-
-      attachStatusPopup();
-      updateTooltips();
-    }
-
-    // Event: Zoomänderung
-    map.on("zoomend", () => {
       toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
       toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
       toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
       toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
 
+      layerPLZ1.addTo(map);
+      layerPLZ2.addTo(map);
+      layerPLZ3.addTo(map);
+      layerPLZ5.addTo(map);
+      markerLayer.addTo(map);
+
       updateMarkerVisibility();
-      updateTooltips();
-    });
-
-    // Event: Checkbox Änderungen
-    document.getElementById("unknownMarkerToggle").addEventListener("change", updateMarkerVisibility);
-    document.getElementById("tttnMarkerToggle").addEventListener("change", updateMarkerVisibility);
-
-    // Stopp / Neustart Buttons
-    btnStop.addEventListener("click", () => {
-      loadingActive = false;
+      updateDebugInfo();
       setLoading(false);
-      btnStop.disabled = true;
-      btnRestart.disabled = false;
-      console.log("Ladevorgang gestoppt.");
-    });
 
-    btnRestart.addEventListener("click", async () => {
-      if (!loadingActive) {
-        btnRestart.disabled = true;
-        btnStop.disabled = false;
-        console.log("Starte Ladevorgang neu...");
-        await loadAllData();
-      }
-    });
+      map.on("zoomend moveend", async () => {
+        toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
+        toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
+        toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
+        toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
+        updateMarkerVisibility();
+        updateTooltips();
 
-    // Initial laden
-    loadAllData();
+        await Promise.all([
+          fetchVisiblePLZStatuses(layerPLZ1, "plz1"),
+          fetchVisiblePLZStatuses(layerPLZ2, "plz2"),
+          fetchVisiblePLZStatuses(layerPLZ3, "plz3"),
+          fetchVisiblePLZStatuses(layerPLZ5, "plz5")
+        ]);
+        updateDebugInfo();
+      });
+    }
 
+    init();
   </script>
 </body>
 </html>
