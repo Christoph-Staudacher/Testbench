@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8" />
-  <title>PLZ-Karte mit Airtable</title>
+  <title>PLZ-Karte mit Lazy Loading & Airtable</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link
     rel="stylesheet"
@@ -57,7 +57,7 @@
 <body>
   <div id="plz-search">
     <label for="plzInput">PLZ eingeben:</label>
-    <input type="text" id="plzInput" placeholder="z.B. 83064" />
+    <input type="text" id="plzInput" placeholder="z.B. 83052" />
     <button id="btnSearch">Suchen</button>
     <label
       ><input type="checkbox" id="unknownMarkerToggle" /> Unbekannte Marker
@@ -101,24 +101,14 @@
       layerPLZ3 = null,
       layerPLZ5 = null;
     let markerLayer = null;
-    const plzFeatures = [];
+    const plzFeatures = []; // Alle Polygon-Layer
     let markerCount = 0;
     let plzCount = { plz1: 0, plz2: 0, plz3: 0, plz5: 0 };
+    const plzStatusCache = {}; // Cache für Status (PLZ->Status)
 
-    // Hilfsfunktion: Zoombereich prüfen
-    function inZoomRange(zoom, range) {
-      return zoom >= range[0] && zoom <= range[1];
-    }
-
-    // Layer ein-/ausblenden je Zoom
-    function toggleLayer(layer, zoomRange) {
-      if (!layer) return;
-      const zoom = map.getZoom();
-      if (inZoomRange(zoom, zoomRange)) {
-        if (!map.hasLayer(layer)) map.addLayer(layer);
-      } else {
-        if (map.hasLayer(layer)) map.removeLayer(layer);
-      }
+    // Hilfsfunktion 250ms warten
+    function delay(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
     // Statusfarbe je nach Wert
@@ -135,22 +125,28 @@
       }
     }
 
-    // Status von Airtable holen
+    // Airtable Status abfragen mit Cache
     async function fetchPLZStatus(plz) {
+      if (plzStatusCache[plz]) return plzStatusCache[plz];
       const url = `https://api.airtable.com/v0/${AIRTABLE_BASE}/${encodeURIComponent(
         AIRTABLE_TABLE
       )}?filterByFormula={PLZ}='${plz}'`;
-      const res = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-        },
-      });
-      if (!res.ok) return null;
-      const json = await res.json();
-      return json.records[0]?.fields?.Status || null;
+      try {
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` },
+        });
+        if (!res.ok) return null;
+        const json = await res.json();
+        const status = json.records[0]?.fields?.Status || null;
+        plzStatusCache[plz] = status;
+        return status;
+      } catch (e) {
+        console.error("Fehler bei Airtable Abfrage", e);
+        return null;
+      }
     }
 
-    // Popup-Inhalt mit Buttons erzeugen
+    // Popup mit Status-Buttons
     function generatePopupContent(plz, status) {
       return `
         <strong>PLZ:</strong> ${plz}<br/>
@@ -161,7 +157,7 @@
       `;
     }
 
-    // PLZ Status setzen und in Airtable speichern + Karte updaten
+    // Status setzen & Airtable speichern
     async function setPLZStatus(plz, status) {
       try {
         await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE}`, {
@@ -174,8 +170,9 @@
             fields: { PLZ: plz, Status: status },
           }),
         });
+        plzStatusCache[plz] = status;
 
-        // Aktualisiere Layer Farbe und Popup
+        // Aktualisiere alle passenden Polygone
         plzFeatures.forEach((layer) => {
           if (
             layer._plz === plz ||
@@ -188,12 +185,12 @@
         });
         updateDebugInfo();
       } catch (e) {
-        alert("Fehler beim Speichern des Status in Airtable.");
+        alert("Fehler beim Speichern in Airtable.");
         console.error(e);
       }
     }
 
-    // PLZ-Layer laden (GeoJSON) mit Airtable-Status
+    // GeoJSON Layer laden (ohne Airtable Status)
     async function loadPLZLayer(url, plzKey) {
       const res = await fetch(url);
       if (!res.ok) {
@@ -204,24 +201,20 @@
       plzCount[plzKey] = data.features.length;
 
       const layer = L.geoJSON(data, {
-        style: (feature) => ({
+        style: {
           color: "#000",
           weight: 1.5,
           fillColor: "transparent",
           fillOpacity: 0.5,
-        }),
-        onEachFeature: async (feature, layer) => {
+        },
+        onEachFeature: (feature, layer) => {
           const plz = feature.properties.plz || "";
           layer._plz = plz;
           layer._plzKey = plzKey;
           plzFeatures.push(layer);
 
-          // Status von Airtable holen
-          const status = await fetchPLZStatus(plz);
-          const fillColor = getFillColor(status);
-          layer.setStyle({ fillColor, fillOpacity: 0.5 });
-
-          layer.bindPopup(generatePopupContent(plz, status));
+          // Popup leer initial binden, später aktualisieren wir die Status-Abfrage lazy
+          layer.bindPopup("Lade Status...");
           layer.bindTooltip(plz, {
             permanent: true,
             direction: "center",
@@ -232,7 +225,47 @@
       return layer;
     }
 
-    // Marker laden
+    // Status für aktuell sichtbare PLZs nachladen mit 250ms Pause zwischen den Anfragen
+    async function lazyLoadVisiblePLZStatus() {
+      if (!layerPLZ1 && !layerPLZ2 && !layerPLZ3 && !layerPLZ5) return;
+
+      const visiblePLZs = [];
+
+      // Alle sichtbaren Layer (auf der Karte) suchen
+      [layerPLZ1, layerPLZ2, layerPLZ3, layerPLZ5].forEach((layer) => {
+        if (!layer) return;
+        if (!map.hasLayer(layer)) return;
+        layer.eachLayer((l) => {
+          if (map.getBounds().intersects(l.getBounds())) {
+            visiblePLZs.push(l);
+          }
+        });
+      });
+
+      let loadedCount = 0;
+      for (const layer of visiblePLZs) {
+        const plz = layer._plz;
+        // Status nur laden wenn noch nicht im Cache
+        if (!plzStatusCache[plz]) {
+          const status = await fetchPLZStatus(plz);
+          plzStatusCache[plz] = status;
+          const color = getFillColor(status);
+          layer.setStyle({ fillColor: color, fillOpacity: 0.5 });
+          layer.bindPopup(generatePopupContent(plz, status));
+          loadedCount++;
+          updateDebugInfo();
+          await delay(250); // 250ms Pause
+        } else {
+          // Bereits geladen, Style aktualisieren
+          const status = plzStatusCache[plz];
+          const color = getFillColor(status);
+          layer.setStyle({ fillColor: color, fillOpacity: 0.5 });
+          layer.bindPopup(generatePopupContent(plz, status));
+        }
+      }
+    }
+
+    // Marker laden (komplett)
     async function loadMarkers(url) {
       const res = await fetch(url);
       if (!res.ok) {
@@ -301,10 +334,12 @@
 
     // Debug Info aktualisieren
     function updateDebugInfo() {
-      document.getElementById("debug-info").innerText = `Geladen: PLZ1=${plzCount.plz1}, PLZ2=${plzCount.plz2}, PLZ3=${plzCount.plz3}, PLZ5=${plzCount.plz5}, Marker=${markerCount}`;
+      document.getElementById(
+        "debug-info"
+      ).innerText = `Geladen: PLZ1=${plzCount.plz1}, PLZ2=${plzCount.plz2}, PLZ3=${plzCount.plz3}, PLZ5=${plzCount.plz5}, Marker=${markerCount}`;
     }
 
-    // Alle Layer & Marker laden
+    // Alles laden, danach Lazy Load und Events
     async function loadAll() {
       layerPLZ1 = await loadPLZLayer(
         "https://christoph-staudacher.github.io/Netzkartendaten/plz-1stellig.geojson",
@@ -327,7 +362,7 @@
         "https://christoph-staudacher.github.io/Netzkartendaten/Netzformen.geojson"
       );
 
-      // Erstmal alle Layer nach Zoom aktivieren/deaktivieren
+      // Alle Layer initial zeigen / verstecken je Zoom
       toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
       toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
       toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
@@ -336,8 +371,11 @@
       updateMarkerVisibility();
       updateDebugInfo();
 
-      // Event für Zoomänderung: Layer umschalten, Marker Sichtbarkeit updaten, Debug aktualisieren
-      map.on("zoomend", () => {
+      // Nachladen der Status für sichtbare PLZ initial
+      await lazyLoadVisiblePLZStatus();
+
+      // Event bei Zoom
+      map.on("zoomend", async () => {
         toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
         toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
         toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
@@ -345,6 +383,8 @@
         if (markerLayer) toggleLayer(markerLayer, ZOOM_RANGE.markers);
         updateMarkerVisibility();
         updateDebugInfo();
+
+        await lazyLoadVisiblePLZStatus();
       });
     }
 
