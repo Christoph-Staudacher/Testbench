@@ -99,6 +99,30 @@
       }
     }
 
+    function updateMarkerVisibility() {
+      if (!markerLayer) return;
+      const showUnknown = document.getElementById('unknownMarkerToggle').checked;
+      const showTTTN = document.getElementById('tttnMarkerToggle').checked;
+
+      markerLayer.eachLayer(marker => {
+        const typ = (marker.feature.properties.Netzform || '').trim().toUpperCase();
+        const coords = marker.getLatLng();
+
+        let visible = false;
+        if (typ === 'TT' || typ === 'TN') visible = showTTTN;
+        else if (!typ && showUnknown) visible = true;
+
+        marker.setStyle({
+          opacity: visible ? 1 : 0,
+          fillOpacity: visible ? 1 : 0
+        });
+      });
+    }
+
+    function evaluateMarkersInTTTNZones() {
+      // Platzhalter für spätere Erweiterung
+    }
+
     async function fetchPLZStatus(plz) {
       const url = `https://api.airtable.com/v0/${AIRTABLE_BASE}/${AIRTABLE_TABLE}?filterByFormula={PLZ}='${plz}'`;
       const response = await fetch(url, {
@@ -176,14 +200,15 @@
       updateMarkerVisibility();
     }
 
-    // ... die restlichen Funktionen bleiben unverändert
-
     async function loadAll() {
       layerPLZ1 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-1stellig.geojson', 'plz1', '#999');
       layerPLZ2 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-2stellig.geojson', 'plz2', '#666');
       layerPLZ3 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-3stellig.geojson', 'plz3', '#444');
       layerPLZ5 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-5stellig.geojson', 'plz5', '#333');
-      await loadMarkers('https://christoph-staudacher.github.io/Netzkartendaten/Netzformen.geojson');
+
+      // Dummy-Marker-Layer mit leerer Gruppe bis Marker-Funktion wieder ergänzt
+      markerLayer = L.layerGroup();
+      markerCount = 0;
 
       evaluateMarkersInTTTNZones();
       updateMarkerVisibility();
@@ -197,7 +222,7 @@
         toggleLayer(markerLayer, ZOOM_RANGE.markers);
       });
 
-      map.fire('zoomend'); // Initialer Zustand
+      map.fire('zoomend');
     }
 
     document.getElementById('unknownMarkerToggle').addEventListener('change', updateMarkerVisibility);
