@@ -28,6 +28,8 @@
     #marker-info, #debug-info {
       font-size: 12px;
       color: #555;
+      width: 100%;
+      margin-top: 5px;
     }
     .status-button {
       margin: 2px;
@@ -149,6 +151,7 @@
           layer.bindPopup(generatePopupContent(plz, status));
         }
       });
+      updateDebugInfo();
     }
 
     async function loadMarkers(url) {
@@ -205,6 +208,11 @@
       }
     }
 
+    function updateDebugInfo() {
+      document.getElementById('debug-info').innerText =
+        `Geladen: PLZ1=${plzCount.plz1}, PLZ2=${plzCount.plz2}, PLZ3=${plzCount.plz3}, PLZ5=${plzCount.plz5}, Marker=${markerCount}`;
+    }
+
     async function loadAll() {
       layerPLZ1 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-1stellig.geojson', '#999', 'plz1');
       layerPLZ2 = await loadPLZLayer('https://christoph-staudacher.github.io/Netzkartendaten/plz-2stellig.geojson', '#666', 'plz2');
@@ -220,6 +228,7 @@
         toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
         if (markerLayer) toggleLayer(markerLayer, ZOOM_RANGE.markers);
         updateMarkerVisibility();
+        updateDebugInfo();
       });
 
       toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
@@ -228,6 +237,7 @@
       toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
       if (markerLayer) toggleLayer(markerLayer, ZOOM_RANGE.markers);
       updateMarkerVisibility();
+      updateDebugInfo();
     }
 
     document.getElementById('plzInput').addEventListener('keydown', (e) => {
