@@ -131,7 +131,7 @@
     }).addTo(map);
 
     let layerPLZ1, layerPLZ2, layerPLZ3, layerPLZ5;
-    const markerLayer = L.layerGroup();
+    let markerLayer = L.layerGroup();
 
     const plzFeatures = [];
     const markerFeatures = [];
@@ -257,11 +257,9 @@
     async function loadMarkers() {
       const res = await fetch(URLS.marker);
       const data = await res.json();
-
       markerCount = data.features.length;
 
       markerLayer.clearLayers();
-      markerFeatures.length = 0;
 
       data.features.forEach((feature) => {
         const latlng = L.latLng(
@@ -289,17 +287,9 @@
         }).bindPopup(`<strong>Netzform:</strong> ${typ || "Unbekannt"}`);
 
         marker.feature = feature;
-
         markerLayer.addLayer(marker);
         markerFeatures.push(marker);
       });
-
-      // Layer hinzufügen, falls noch nicht auf Map
-      if (!map.hasLayer(markerLayer)) map.addLayer(markerLayer);
-
-      updateDebugInfo();
-
-      console.log("Marker geladen:", markerCount, markerFeatures.length, markerLayer.getLayers().length);
     }
 
     // Marker Sichtbarkeit nach Zoom und Checkboxen
@@ -308,30 +298,12 @@
       const showUnknown = document.getElementById("unknownMarkerToggle").checked;
       const showTTTN = document.getElementById("tttnMarkerToggle").checked;
 
-      // Set aller PLZ mit TT oder TN Status
-      const validTTTNPLZs = new Set(
-        Object.entries(plzStatusCache)
-          .filter(([plz, obj]) => obj.status === "TT" || obj.status === "TN")
-          .map(([plz]) => plz)
-      );
-
       markerLayer.eachLayer((marker) => {
-        const feature = marker.feature;
-        const typ = (feature.properties.Netzform || "").trim().toUpperCase();
-        const plz = feature.properties.PLZ;
+        const typ = (marker.feature.properties.Netzform || "").trim().toUpperCase();
 
         let visible = false;
-        if ((typ === "TT" || typ === "TN") && plz && validTTTNPLZs.has(plz)) {
-          visible = showTTTN;
-        } else if (!typ) {
-          visible = showUnknown;
-        } else if (!plz) {
-          // Marker ohne PLZ: nur anzeigen, wenn "unbekannte Marker" an ist
-          visible = showUnknown;
-        } else {
-          // Marker mit Netzform Misch oder andere, immer anzeigen
-          visible = true;
-        }
+        if (typ === "TT" || typ === "TN") visible = showTTTN;
+        else if (!typ) visible = showUnknown;
 
         marker.setStyle({
           opacity: visible ? 1 : 0,
@@ -472,111 +444,171 @@
     // Hilfsfunktion zum Erzeugen und Speichern der untergeordneten PLZ inkl. 5-stellig
     async function saveSubPLZ(plz, status) {
       if (!loadingActive) return;
-      // z.B. 3-stellige PLZ "123" → untergeordnete PLZ 12300–12399 (5-stellig) falls vorhanden
-      const len = plz.length;
-      if (![1, 2, 3, 5].includes(len)) return;
 
-      // Für 1-,2-,3-stellig → prüfen, ob 5-stellige PLZ vorhanden
-      if (len < 5) {
-        const base = plz.padEnd(5, "0");
-        // Prüfen, ob 5-stellige PLZ Layer hat entsprechende PLZ
-        const exist5 = plzFeatures.some((layer) => layer._plz && layer._plz.startsWith(plz) && layer._plz.length === 5);
-        if (!exist5) return;
+      const subPLZs = new Set();
 
-        for (let i = 0; i < 100; i++) {
-          if (!loadingActive) return;
-          const subPLZ = base.slice(0, 3) + String(i).padStart(2, "0");
-          const layerFound = plzFeatures.find((l) => l._plz === subPLZ);
-          if (!layerFound) continue;
+      if (plz.length === 1) {
+        // 2-stellig
+        for (let i = 0; i <= 9; i++) {
+          subPLZs.add(plz + i);
+        }
+        // 3-stellig
+        for (let i = 0; i <= 9; i++) {
+          for (let j = 0; j <= 9; j++) {
+            subPLZs.add(plz + i + j);
+          }
+        }
+        // 5-stellig
+        for (let i = 0; i <= 9; i++) {
+          for (let j = 0; j <= 9; j++) {
+            for (let k = 0; k <= 9; k++) {
+              for (let l = 0; l <= 9; l++) {
+                subPLZs.add(plz + i + j + k + l);
+              }
+            }
+          }
+        }
+      } else if (plz.length === 2) {
+        // 3-stellig
+        for (let i = 0; i <= 9; i++) {
+          subPLZs.add(plz + i);
+        }
+        // 5-stellig
+        for (let i = 0; i <= 9; i++) {
+          for (let j = 0; j <= 9; j++) {
+            for (let k = 0; k <= 9; k++) {
+              subPLZs.add(plz + i + j + k);
+            }
+          }
+        }
+      } else if (plz.length === 3) {
+        // 5-stellig
+        for (let i = 0; i <= 9; i++) {
+          for (let j = 0; j <= 9; j++) {
+            subPLZs.add(plz + i + j);
+          }
+        }
+      } else if (plz.length === 5) {
+        // Keine Unterplz mehr
+        return;
+      } else {
+        return;
+      }
 
-          // Direkt Status speichern, aber nicht Airtable doppelt füllen (nur Cache)
-          plzStatusCache[subPLZ] = { status };
-          layerFound.setStyle({
-            fillColor:
-              status === "TT"
-                ? "rgba(255,0,0,0.5)"
-                : status === "TN"
-                ? "rgba(0,255,0,0.5)"
-                : status === "Misch"
-                ? "rgba(255,165,0,0.5)"
-                : "transparent",
-            fillOpacity: 0.5,
-          });
+      // Filter subPLZs nur auf diejenigen, die im plzFeatures Layer existieren
+      const plzExists = new Set(plzFeatures.map(f => f._plz));
+      const toProcess = [...subPLZs].filter(sub => plzExists.has(sub));
+
+      for (const sub of toProcess) {
+        if (!loadingActive) break;
+        await saveOrUpdatePLZStatus(sub, status);
+        await sleep(250);
+      }
+    }
+
+    // Initiales Laden aller GeoJSON Layer
+    async function initializeLayers() {
+      setLoading(true, "Lade PLZ 1-stellig...");
+      layerPLZ1 = await loadPLZLayer(URLS.plz1, "plz1");
+      updateDebugInfo();
+
+      setLoading(true, "Lade PLZ 2-stellig...");
+      layerPLZ2 = await loadPLZLayer(URLS.plz2, "plz2");
+      updateDebugInfo();
+
+      setLoading(true, "Lade PLZ 3-stellig...");
+      layerPLZ3 = await loadPLZLayer(URLS.plz3, "plz3");
+      updateDebugInfo();
+
+      setLoading(true, "Lade PLZ 5-stellig...");
+      layerPLZ5 = await loadPLZLayer(URLS.plz5, "plz5");
+      updateDebugInfo();
+
+      setLoading(true, "Lade Marker...");
+      await loadMarkers();
+      updateDebugInfo();
+
+      map.addLayer(markerLayer);
+
+      attachStatusPopup();
+
+      setLoading(false);
+    }
+
+    // Ermitteln sichtbarer PLZ (Polygon Layer)
+    function getVisiblePLZ() {
+      const bounds = map.getBounds();
+      const visiblePLZSet = new Set();
+
+      plzFeatures.forEach((layer) => {
+        if (bounds.intersects(layer.getBounds())) {
+          visiblePLZSet.add(layer._plz);
+        }
+      });
+      return [...visiblePLZSet];
+    }
+
+    // Status für alle sichtbaren PLZ nachladen (wenn noch nicht im Cache)
+    async function refreshVisiblePLZStatus() {
+      if (!loadingActive) return;
+      const visiblePLZ = getVisiblePLZ();
+
+      for (const plz of visiblePLZ) {
+        if (!plzStatusCache[plz]) {
+          const record = await fetchPLZStatusWithRetry(plz);
+          if (!loadingActive) break;
+          if (record && record.status) {
+            plzStatusCache[plz] = { status: record.status };
+            updatePLZFeaturesStatus(plz, record.status);
+          }
+          await sleep(250);
         }
       }
     }
 
-    // Initialisiere alle Layer, lade GeoJSONs und Marker
-    async function initializeLayers() {
-      setLoading(true, "Lade 1-stellige PLZ...");
-      layerPLZ1 = await loadPLZLayer(URLS.plz1, "plz1");
-      setLoading(true, "Lade 2-stellige PLZ...");
-      layerPLZ2 = await loadPLZLayer(URLS.plz2, "plz2");
-      setLoading(true, "Lade 3-stellige PLZ...");
-      layerPLZ3 = await loadPLZLayer(URLS.plz3, "plz3");
-      setLoading(true, "Lade 5-stellige PLZ...");
-      layerPLZ5 = await loadPLZLayer(URLS.plz5, "plz5");
-
-      if (layerPLZ1) layerPLZ1.addTo(map);
-      if (layerPLZ2) layerPLZ2.addTo(map);
-      if (layerPLZ3) layerPLZ3.addTo(map);
-      if (layerPLZ5) layerPLZ5.addTo(map);
-
-      setLoading(true, "Lade Marker...");
-      await loadMarkers();
-
-      setLoading(false);
-
-      updateMarkerVisibility();
-      updateTooltips();
-      attachStatusPopup();
-
-      refreshVisiblePLZStatus();
-    }
-
-    // Aktualisiere Sichtbarkeit der PLZ je nach Zoomstufe
-    function refreshVisiblePLZStatus() {
+    // Eventhandler für Zoom & Moveend
+    async function onMapChanged() {
       toggleLayer(layerPLZ1, ZOOM_RANGE.plz1);
       toggleLayer(layerPLZ2, ZOOM_RANGE.plz2);
       toggleLayer(layerPLZ3, ZOOM_RANGE.plz3);
       toggleLayer(layerPLZ5, ZOOM_RANGE.plz5);
 
-      updateTooltips();
       updateMarkerVisibility();
+      updateTooltips();
+
+      await refreshVisiblePLZStatus();
     }
 
-    // Event Listener für Karte Zoom und Bewegung
-    map.on("zoomend moveend", () => {
-      refreshVisiblePLZStatus();
-    });
+    // Eventhandler für Checkboxen
+    document.getElementById("unknownMarkerToggle").addEventListener("change", updateMarkerVisibility);
+    document.getElementById("tttnMarkerToggle").addEventListener("change", updateMarkerVisibility);
 
-    // Checkbox Eventhandler für Marker-Anzeige
-    document.getElementById("unknownMarkerToggle").addEventListener("change", () => {
-      updateMarkerVisibility();
-    });
-    document.getElementById("tttnMarkerToggle").addEventListener("change", () => {
-      updateMarkerVisibility();
-    });
-
-    // Ladeprozess Steuerung Buttons
     btnStop.addEventListener("click", () => {
       loadingActive = false;
       setLoading(false);
       btnStop.disabled = true;
       btnRestart.disabled = false;
     });
-    btnRestart.addEventListener("click", async () => {
-      if (loadingActive) return;
-      loadingActive = true;
-      btnStop.disabled = false;
-      btnRestart.disabled = true;
 
-      await initializeLayers();
-      updateDebugInfo();
+    btnRestart.addEventListener("click", () => {
+      if (!loadingActive) {
+        loadingActive = true;
+        initializeLayers().then(() => {
+          btnStop.disabled = false;
+          btnRestart.disabled = true;
+          onMapChanged();
+        });
+      }
     });
 
-    // Starte alles beim Laden
-    initializeLayers();
+    map.on("zoomend", onMapChanged);
+    map.on("moveend", onMapChanged);
+
+    // Initialisierung
+    (async () => {
+      await initializeLayers();
+      await onMapChanged();
+    })();
   </script>
 </body>
 </html>
